@@ -1,0 +1,30 @@
+# .gitignore for Tradebot project
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.env
+venv/
+
+# Logs
+logs/
+*.log
+
+# Data
+*.db
+*.sqlite3
+data/
+
+# Secrets and tokens
+*.env
+*secret*
+*token*
+*key*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/

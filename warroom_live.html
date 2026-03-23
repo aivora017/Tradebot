@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>WAR ROOM — Live Dashboard</title>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#060a12;color:#e2e8f0;font-family:'SF Mono',Consolas,monospace;font-size:13px}
+.app{min-height:100vh;padding:6px}
+.top{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;background:#0d1424;border:1px solid #1a2540;border-radius:6px;margin-bottom:6px;flex-wrap:wrap;gap:6px}
+.logo{font-size:15px;font-weight:700;color:#f59e0b;letter-spacing:2px}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:3px}
+.dot-live{background:#34d399;animation:blink 1.5s infinite}
+.dot-off{background:#f87171}
+.dot-stale{background:#fbbf24}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0.4}}
+.pill{padding:2px 9px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap}
+.g{background:#042b1e;color:#34d399;border:1px solid #065f46}
+.r{background:#2d0808;color:#f87171;border:1px solid #7f1d1d}
+.y{background:#2d1500;color:#fbbf24;border:1px solid #78350f}
+.b{background:#071230;color:#60a5fa;border:1px solid #1e3a5f}
+.p{background:#1a0640;color:#c084fc;border:1px solid #4c1d95}
+.gr{background:#131c30;color:#64748b;border:1px solid #1e293b}
+.tabs{display:flex;gap:1px;margin-bottom:6px;border-bottom:1px solid #1a2540}
+.tab{padding:5px 13px;font-size:12px;cursor:pointer;background:transparent;border:none;color:#475569;border-bottom:2px solid transparent;margin-bottom:-1px;font-family:inherit}
+.tab.on{color:#f59e0b;border-bottom-color:#f59e0b}
+.tab:hover:not(.on){color:#cbd5e1}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.card{background:#0d1424;border:1px solid #1a2540;border-radius:5px;padding:9px}
+.ct{font-size:10px;color:#334155;text-transform:uppercase;letter-spacing:.8px;margin-bottom:7px;border-bottom:1px solid #1a2540;padding-bottom:5px;display:flex;justify-content:space-between;align-items:center}
+.m{background:#060a12;border:1px solid #1a2540;border-radius:4px;padding:8px;text-align:center}
+.ml{font-size:10px;color:#334155;letter-spacing:.5px;margin-bottom:2px}
+.mv{font-size:19px;font-weight:700;line-height:1.1}
+.ms{font-size:10px;color:#334155;margin-top:2px}
+.pos{color:#34d399}.neg{color:#f87171}.zer{color:#64748b}.yel{color:#fbbf24}
+.row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #060a12;font-size:12px;flex-wrap:wrap;gap:4px}
+.row:last-child{border-bottom:none}
+.btn{padding:5px 11px;border:1px solid #1a2540;border-radius:4px;background:#0d1424;color:#e2e8f0;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600}
+.btn:hover:not(:disabled){background:#1a2540}
+.btn:disabled{opacity:.35;cursor:not-allowed}
+.btn-g{border-color:#065f46;color:#34d399;background:#042b1e}
+.btn-r{border-color:#7f1d1d;color:#f87171;background:#2d0808}
+.btn-y{border-color:#78350f;color:#fbbf24;background:#2d1500}
+.btn-p{border-color:#4c1d95;color:#c084fc;background:#1a0640}
+.tc{border-left:3px solid #1a2540;padding:8px;background:#060a12;border-radius:4px;margin-bottom:5px}
+.tc-pos{border-left-color:#34d399}.tc-neg{border-left-color:#f87171}
+.dec{padding:9px;background:#060a12;border-radius:4px;border-left:3px solid #f59e0b;margin-bottom:7px}
+.chain-row{display:grid;grid-template-columns:70px 55px 60px 60px 1fr 60px 55px 70px;gap:3px;padding:3px 0;border-bottom:1px solid #060a12;font-size:11px;align-items:center}
+.chain-h{color:#334155;font-size:9px;text-transform:uppercase}
+.atm-row{background:#0d1a2e}
+.sig{padding:6px 0;border-bottom:1px solid #060a12;font-size:11px}
+.sig:last-child{border-bottom:none}
+.info{padding:7px 9px;background:#071230;border:1px solid #1e3a5f;border-radius:4px;font-size:11px;color:#60a5fa;margin-bottom:7px;line-height:1.6}
+.warn{padding:7px 9px;background:#2d1500;border:1px solid #78350f;border-radius:4px;font-size:11px;color:#fbbf24;margin-bottom:7px;line-height:1.6}
+.suc{padding:7px 9px;background:#042b1e;border:1px solid #065f46;border-radius:4px;font-size:11px;color:#34d399;margin-bottom:7px;line-height:1.6}
+.flags{display:flex;gap:3px;flex-wrap:wrap;margin-top:5px}
+.flag{padding:1px 6px;border-radius:8px;font-size:10px;font-weight:600}
+.fok{background:#042b1e;color:#34d399}.fno{background:#2d0808;color:#f87171}
+.fld{display:flex;flex-direction:column;gap:2px;margin-bottom:5px}
+.fld label{font-size:10px;color:#475569}
+.fld input,.fld select{padding:4px 7px;border:1px solid #1a2540;border-radius:3px;background:#060a12;color:#e2e8f0;font-size:11px;font-family:inherit;width:100%}
+.fld input:focus,.fld select:focus{outline:none;border-color:#f59e0b}
+code{background:#1a2540;padding:1px 5px;border-radius:3px;font-size:11px;color:#94a3b8}
+pre{background:#060a12;border:1px solid #1a2540;padding:9px;border-radius:4px;font-size:11px;color:#94a3b8;overflow-x:auto;line-height:1.7;margin:5px 0}
+.log-line{padding:3px 0;font-size:11px;border-bottom:1px solid #060a12;line-height:1.4}
+.log-line:last-child{border-bottom:none}
+.prog{height:4px;background:#1a2540;border-radius:2px;overflow:hidden;margin-top:3px}
+.pf{height:100%;border-radius:2px;transition:width .5s}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback}=React;
+
+const SYS=`You are WARROOM-AI — fully autonomous NSE intraday option buying bot for Sourav Shaw.
+Capital: Rs.50,000 start, compound to Rs.14 lakhs in 12 months at 60%/month.
+LOT SIZES (SEBI 2024): BankNifty=30 units/lot, Nifty=75 units/lot.
+EXPIRY: BankNifty=Wednesday, Nifty=Tuesday (changed Sep 2025).
+RISK: 5% of current capital per trade (dynamic, grows with capital).
+VIX: <12=SKIP, 12-16=REDUCED(50%size), 16-22=IDEAL(full), 22-28=ELEVATED(straddle pref), >28=SKIP
+TIME: 09:20-11:00=PRIMARY, 11:00-11:30=LATE, 11:30-13:30=DEAD(no entry), 13:30-14:00=SECONDARY, >14:00=EXIT_ONLY
+EXPIRY DAY: all exits by 11:00, Gamma play 9:15-9:35 ONLY.
+STOPS: daily loss>5%=STOP_TRADING; 3 consec losses=STOP_TRADING; max 2 concurrent; max 3/day.
+GLOBAL: Crude>$105=PE bias BN; USDINR>87=PE bias; US fell>1%=gap-down early PE.
+FII: consecutive sell>5days=strong PE bias; FII buy=CE bias.
+EVENT: HIGH event<15min=WAIT; 15-60min=straddle only.
+STRATEGIES: S1_ORB ORB 9:20 SL20% T1 50% T2 100% | S2_SR S/R Reversal SL25% T1 50% T2 100% | S3_GAP Gap and Go SL20% T1 40% T2 80% | S4_TREND Trend 9EMA SL22% T1 80% T2 150% | S5_VWAP VWAP Pullback SL20% T1 60% T2 120% | S6_ENG Engulfing BN SL15% T1 35% T2 60% | S7_EMA EMA Cross SL20% T1 60% T2 120% | S8_STR Straddle SL25% T1 50% T2 150% | S9_GAMMA Gamma expiry SL50% T1 200% T2 500% | S10_15M 15MinBreak SL20% T1 40% T2 80%
+RESPOND ONLY JSON:
+{"action":"BUY|WAIT|SKIP|EXIT|STOP_TRADING","instrument":"BANKNIFTY|NIFTY","strike":54000,"option_type":"CE|PE|CE+PE","expiry":"26 Mar","lots":1,"estimated_premium":200,"entry_at_index":54200,"sl_premium_pct":20,"sl_index_level":54500,"t1_premium_pct":50,"t2_premium_pct":100,"exit_by":"14:00","capital_risk_rs":2500,"strategy":"S1_ORB","tier":1,"confidence":"LOW|MEDIUM|HIGH|GODMODE","confidence_score":72,"reasoning":"Specific one-sentence rationale with exact levels.","market_type":"Trending|Rangebound|Event|Expiry|Reversal","vix_status":"IDEAL|REDUCED|SKIP|ELEVATED|EXTREME","news_driver":"Key news or NONE","event_risk":"HIGH|MEDIUM|LOW","key_risk":"Main risk in one sentence.","flags":{"vix_ok":true,"iv_rank_ok":true,"global_ok":true,"fii_ok":false,"time_ok":true,"event_safe":true}}`;
+
+const LEARN_SYS=`You are WARROOM-AI. Self-improvement analysis on past trades. JSON only:
+{"grade":"A|B|C|D|F","win_rate_analysis":"...","top_mistakes":["...","...","..."],"improvements":["...","...","..."],"capital_mgmt_note":"...","next_week_focus":"...","strategy_ranking":{"best":"...","worst":"...","why":"..."}}`;
+
+const fmt=(n,d=0)=>isNaN(+n)?'—':(+n).toFixed(d);
+const fmtRs=n=>{const v=Math.abs(+n);const s=+n<0?'-':'';return s+'₹'+(v>=100000?(v/100000).toFixed(1)+'L':v>=1000?(v/1000).toFixed(1)+'K':v.toFixed(0))};
+const fmtP=n=>isNaN(+n)?'—':(+n>=0?'+':'')+fmt(n,1)+'%';
+const col=n=>+n>0?'pos':+n<0?'neg':'zer';
+const ts=()=>new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+const ACT_COL={BUY:'#34d399',WAIT:'#fbbf24',SKIP:'#64748b',EXIT:'#fb923c',STOP_TRADING:'#f87171'};
+const VIX_COL=v=>+v>=16&&+v<=22?'g':+v<12||+v>28?'r':'y';
+
+function App(){
+  const [tab,setTab]=useState('live');
+  const [bridgeUrl,setBridgeUrl]=useState('');
+  const [bridgeOk,setBridgeOk]=useState(false);
+  const [snap,setSnap]=useState(null);
+  const [syncTs,setSyncTs]=useState(null);
+  const [syncErr,setSyncErr]=useState('');
+  const [aiLoad,setAiLoad]=useState(false);
+  const [running,setRunning]=useState(false);
+  const [decisions,setDecisions]=useState([]);
+  const [lastDec,setLastDec]=useState(null);
+  const [logs,setLogs]=useState([]);
+  const [learnRep,setLearnRep]=useState(null);
+  const [learnLoad,setLearnLoad]=useState(false);
+  const [closed,setClosed]=useState([]);
+  const [capital,setCapital]=useState(50000);
+  const snapRef=useRef(null);
+  const capRef=useRef(50000);
+  const closedRef=useRef([]);
+
+  useEffect(()=>{snapRef.current=snap},[snap]);
+  useEffect(()=>{capRef.current=capital},[capital]);
+  useEffect(()=>{closedRef.current=closed},[closed]);
+
+  const save=async(k,v)=>{try{await window.storage.set(k,JSON.stringify(v))}catch(e){}};
+  const load=async k=>{try{const r=await window.storage.get(k);return r?JSON.parse(r.value):null}catch(e){return null}};
+
+  useEffect(()=>{
+    (async()=>{
+      // Auto-detect bridge URL: if served from ngrok/network, use own origin
+      const selfUrl = window.location.origin;
+      const isNgrok = selfUrl.includes('ngrok') || selfUrl.includes('localhost') || selfUrl.includes('127.0.0.1');
+      if(isNgrok && selfUrl !== 'null' && !selfUrl.startsWith('file')) {
+        setBridgeUrl(selfUrl);
+        save('bUrl', selfUrl);
+      } else {
+        const u=await load('bUrl');if(u)setBridgeUrl(u);
+      }
+      const ct=await load('closedT');if(ct){setClosed(ct);closedRef.current=ct;}
+      const c=await load('cap');if(c){setCapital(c);capRef.current=c;}
+    })();
+  },[]);
+
+  const log2=(msg,type='info')=>{
+    const c={info:'#60a5fa',success:'#34d399',warn:'#fbbf24',error:'#f87171',trade:'#c084fc',ai:'#f59e0b'};
+    setLogs(p=>[{t:ts(),msg,c:c[type]},...p].slice(0,150));
+  };
+
+  const fetchSnap=useCallback(async()=>{
+    if(!bridgeUrl)return;
+    try{
+      const r=await fetch(`${bridgeUrl.replace(/\/$/,'')}/api/snapshot`,{signal:AbortSignal.timeout(5000)});
+      if(!r.ok)throw new Error(`HTTP ${r.status}`);
+      const d=await r.json();
+      setSnap(d);snapRef.current=d;setBridgeOk(true);setSyncTs(ts());setSyncErr('');
+    }catch(e){setBridgeOk(false);setSyncErr(e.message);}
+  },[bridgeUrl]);
+
+  // Auto-start when bridgeUrl is set from ngrok origin
+  useEffect(()=>{
+    const selfUrl = window.location.origin;
+    const isNgrok = selfUrl.includes('ngrok') || selfUrl.includes('localhost') || selfUrl.includes('127.0.0.1');
+    if(bridgeUrl && isNgrok && !running) {
+      setRunning(true);
+    }
+  },[bridgeUrl]);
+
+  useEffect(()=>{
+    if(!bridgeUrl||!running)return;
+    fetchSnap();const i=setInterval(fetchSnap,5000);return()=>clearInterval(i);
+  },[bridgeUrl,running,fetchSnap]);
+
+  const callClaude=useCallback(async()=>{
+    if(aiLoad)return;setAiLoad(true);
+    const s=snapRef.current;
+    const packet={...(s||{}),capital_current:Math.round(capRef.current),capital_start:50000,
+      recent_closed:closedRef.current.slice(0,5).map(t=>({instrument:t.instrument,strategy:t.strategy,pnl_pct:fmt(t.pnl_pct,1),exit_reason:t.exit_reason}))};
+    try{
+      const res=await fetch(`${bridgeUrl.replace(/\/$/,'')}/api/claude`,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:800,system:SYS,
+          messages:[{role:'user',content:`Live data:\n${JSON.stringify(packet,null,2)}\n\nDecision:`}]})});
+      const d=await res.json();
+      let raw=d.content?.filter(x=>x.type==='text').map(x=>x.text).join('')||'';
+      if(raw.includes('```')){raw=raw.split('```')[1];if(raw.toLowerCase().startsWith('json'))raw=raw.slice(4);}
+      const dec=JSON.parse(raw.trim());dec._ts=ts();
+      setLastDec(dec);setDecisions(p=>[dec,...p].slice(0,50));
+      log2(`🤖 ${dec.action} [${dec.confidence}·${dec.confidence_score}] ${dec.action==='BUY'?dec.instrument+' '+dec.strike+dec.option_type:''} — ${(dec.reasoning||'').slice(0,70)}`,'ai');
+    }catch(e){log2('Claude error: '+e.message,'error');}
+    setAiLoad(false);
+  },[aiLoad]);
+
+  const selfLearn=async()=>{
+    const ct=closedRef.current;if(ct.length<3)return;
+    setLearnLoad(true);
+    const w=ct.filter(t=>t.pnl_rs>0).length;
+    try{
+      const res=await fetch(`${bridgeUrl.replace(/\/$/,'')}/api/claude`,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:800,system:LEARN_SYS,
+          messages:[{role:'user',content:JSON.stringify({total:ct.length,wins:w,wr:fmt(w/ct.length*100,1),net_pnl:ct.reduce((s,t)=>s+(t.pnl_rs||0),0),trades:ct.slice(0,20)})}]})}); 
+      const d=await res.json();
+      let raw=d.content?.filter(x=>x.type==='text').map(x=>x.text).join('')||'';
+      if(raw.includes('```')){raw=raw.split('```')[1];if(raw.toLowerCase().startsWith('json'))raw=raw.slice(4);}
+      setLearnRep(JSON.parse(raw.trim()));log2('📚 Self-analysis complete','ai');
+    }catch(e){log2('Learn error: '+e.message,'error');}
+    setLearnLoad(false);
+  };
+
+  useEffect(()=>{
+    if(!running)return;
+    fetchSnap();callClaude();
+    const ai=setInterval(callClaude,120000);
+    const sy=setInterval(fetchSnap,5000);
+    return()=>{clearInterval(ai);clearInterval(sy);};
+  },[running]);
+
+  const cmdBot=async body=>{
+    if(!bridgeOk)return;
+    try{await fetch(`${bridgeUrl.replace(/\/$/,'')}/api/command`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});}
+    catch(e){log2('Cmd error: '+e.message,'error');}
+  };
+
+  const m=snap?.market||{};const BN=m.BANKNIFTY||{};const N50=m.NIFTY||{};
+  const vix=m.VIX||0;const tw=snap?.window||'PRE_MARKET';
+  const stats=snap?.daily_stats||{};const dec=snap?.claude_last||lastDec;
+  const openTrades=snap?.open_trades||[];const signals=(snap?.signals||[]).slice(0,8);
+  const chain=snap?.atm_chain||[];const orb=snap?.orb||{};
+  const growth=((capital-50000)/50000)*100;
+  const totalPnl=closed.reduce((s,t)=>s+(t.pnl_rs||0),0);
+  const wins=closed.filter(t=>t.pnl_rs>0).length;
+  const wr=closed.length?wins/closed.length*100:0;
+  const twC={PRIMARY:'g',LATE_PRIMARY:'y',DEAD_ZONE:'r',SECONDARY:'y',PRE_MARKET:'gr',EXIT_ONLY:'r'};
+
+  return(
+    <div className="app">
+      <div className="top">
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <span className="logo">⚡ WAR ROOM</span>
+          <span className={`dot ${bridgeOk&&running?'dot-live':bridgeOk?'dot-stale':'dot-off'}`}/>
+          <span style={{fontSize:11,color:'#334155'}}>{syncTs?`sync ${syncTs}`:(bridgeUrl?'connecting…':'setup needed')}</span>
+        </div>
+        <div style={{display:'flex',gap:5,flexWrap:'wrap',alignItems:'center'}}>
+          <span className={`pill ${twC[tw]||'gr'}`}>{tw}</span>
+          <span className={`pill ${VIX_COL(vix)}`}>VIX {fmt(vix,1)||'—'}</span>
+          <span className="pill b">{fmtRs(capital)}</span>
+          <span className={`pill ${+growth>=0?'g':'r'}`}>{fmtP(growth)}</span>
+          {stats.stopped&&<span className="pill r" style={{animation:'blink 1s infinite'}}>STOP</span>}
+          {!bridgeOk&&bridgeUrl&&<span className="pill r">{syncErr.slice(0,20)||'offline'}</span>}
+        </div>
+        <div style={{display:'flex',gap:5}}>
+          <button className={`btn ${running?'btn-r':'btn-g'}`} onClick={()=>setRunning(r=>!r)}>
+            {running?'⏹ STOP':'▶ START'}
+          </button>
+          <button className="btn btn-y" onClick={callClaude} disabled={aiLoad}>{aiLoad?'…':'⚡ AI'}</button>
+          <button className="btn" onClick={()=>cmdBot({cmd:'force_claude'})} disabled={!bridgeOk} title="Force Claude on bot">bot⚡</button>
+        </div>
+      </div>
+
+      <div className="tabs">
+        {[['live','Live Data'],['chain','Chain'],['signals','Signals'],['dashboard','Dashboard'],
+          ['trades','Trades'+(openTrades.length?` (${openTrades.length})`:'')],
+          ['decisions','AI Log'],['journal','Journal'],['learn','Self-Learn'],['setup','Setup']
+        ].map(([id,lbl])=>(
+          <button key={id} className={`tab${tab===id?' on':''}`} onClick={()=>setTab(id)}>{lbl}</button>
+        ))}
+      </div>
+
+      {tab==='live'&&(
+        <div>
+          {!bridgeOk&&<div className="warn">Bridge not connected. Go to Setup → paste ngrok URL → Test.</div>}
+          {bridgeOk&&<div className="suc">✓ Live sync from Python bot every 5s — real Upstox WebSocket data</div>}
+          <div className="g4" style={{marginBottom:6}}>
+            <div className="m"><div className="ml">BANKNIFTY</div><div className={`mv ${col(BN.chg_pct)}`}>{BN.ltp?BN.ltp.toLocaleString('en-IN',{maximumFractionDigits:0}):'—'}</div><div className={`ms ${col(BN.chg_pct)}`}>{fmtP(BN.chg_pct)}</div></div>
+            <div className="m"><div className="ml">NIFTY 50</div><div className={`mv ${col(N50.chg_pct)}`}>{N50.ltp?N50.ltp.toLocaleString('en-IN',{maximumFractionDigits:0}):'—'}</div><div className={`ms ${col(N50.chg_pct)}`}>{fmtP(N50.chg_pct)}</div></div>
+            <div className="m"><div className="ml">INDIA VIX</div><div className={`mv ${+vix>=16&&+vix<=22?'pos':+vix<12?'neg':'yel'}`}>{fmt(vix,2)||'—'}</div><div className="ms">{m.vix_zone||'—'}</div></div>
+            <div className="m"><div className="ml">PCR BN / N50</div><div className={`mv ${+m.PCR_BN>1.2?'pos':+m.PCR_BN<0.8?'neg':'zer'}`}>{fmt(m.PCR_BN,3)||'—'}</div><div className="ms">MP: {m.max_pain_BN||'—'}</div></div>
+          </div>
+          <div className="g3" style={{marginBottom:6}}>
+            <div className="card">
+              <div className="ct">BN Range</div>
+              <div className="row"><span style={{color:'#94a3b8'}}>High</span><span className="pos">{BN.high?BN.high.toLocaleString('en-IN',{maximumFractionDigits:0}):'—'}</span></div>
+              <div className="row"><span style={{color:'#94a3b8'}}>Low</span><span className="neg">{BN.low?BN.low.toLocaleString('en-IN',{maximumFractionDigits:0}):'—'}</span></div>
+              <div className="row"><span style={{color:'#94a3b8'}}>Range</span><span className="yel">{BN.high&&BN.low?Math.round(BN.high-BN.low):'—'} pts</span></div>
+            </div>
+            <div className="card">
+              <div className="ct">ORB State</div>
+              {orb.high?(<>
+                <div className="row"><span style={{color:'#94a3b8'}}>High</span><span className="pos">{orb.high}</span></div>
+                <div className="row"><span style={{color:'#94a3b8'}}>Low</span><span className="neg">{orb.low}</span></div>
+                <div className="row"><span style={{color:'#94a3b8'}}>Range</span><span>{orb.range} pts</span></div>
+                <div className="row"><span style={{color:'#94a3b8'}}>Triggered</span><span className={orb.triggered?'pos':'yel'}>{orb.triggered?'YES':'WAITING'}</span></div>
+              </>):<div style={{color:'#334155',padding:'6px 0',fontSize:11}}>ORB not set (marks at 9:15-9:20)</div>}
+            </div>
+            <div className="card">
+              <div className="ct">Session</div>
+              <div className="row"><span style={{color:'#94a3b8'}}>Mode</span><span className="yel">{snap?.execution_mode||'—'}</span></div>
+              <div className="row"><span style={{color:'#94a3b8'}}>WS</span><span className={snap?.ws_connected?'pos':'neg'}>{snap?.ws_connected?'CONNECTED':'DISCONNECTED'}</span></div>
+              <div className="row"><span style={{color:'#94a3b8'}}>Expiry Day</span><span className={snap?.expiry_day?'neg':'zer'}>{snap?.expiry_day?'YES — EXIT 11AM':'NO'}</span></div>
+              <div className="row"><span style={{color:'#94a3b8'}}>Date</span><span style={{fontSize:11,color:'#64748b'}}>{snap?.date||'—'}</span></div>
+            </div>
+          </div>
+          {snap?.last_5m_candle&&Object.keys(snap.last_5m_candle).length>0&&(
+            <div className="card" style={{marginBottom:6}}>
+              <div className="ct">Last 5-min candle (BN)</div>
+              <div style={{display:'flex',gap:16,fontSize:12,flexWrap:'wrap'}}>
+                <span>O:<span className="yel"> {fmt(snap.last_5m_candle.open,0)}</span></span>
+                <span>H:<span className="pos"> {fmt(snap.last_5m_candle.high,0)}</span></span>
+                <span>L:<span className="neg"> {fmt(snap.last_5m_candle.low,0)}</span></span>
+                <span>C:<span className={snap.last_5m_candle.bullish?'pos':'neg'}> {fmt(snap.last_5m_candle.close,0)}</span></span>
+                <span>Range: {snap.last_5m_candle.range} pts</span>
+                <span className={snap.last_5m_candle.bullish?'pos':'neg'}>{snap.last_5m_candle.bullish?'BULLISH':'BEARISH'}</span>
+              </div>
+            </div>
+          )}
+          {snap?.morning_intel?.market_type&&(
+            <div className="card">
+              <div className="ct">Morning Intelligence</div>
+              <div style={{display:'flex',gap:10,flexWrap:'wrap',fontSize:12}}>
+                <span>Type: <span className="yel">{snap.morning_intel.market_type}</span></span>
+                <span>Bias: <span className={snap.morning_intel.bias==='BEARISH'?'neg':snap.morning_intel.bias==='BULLISH'?'pos':'zer'}>{snap.morning_intel.bias}</span></span>
+                <span style={{color:'#64748b',flex:1,fontSize:11}}>{snap.morning_intel.recommended_strategy}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab==='chain'&&(
+        <div className="card">
+          <div className="ct">ATM Option Chain — BankNifty (live from Upstox)</div>
+          <div style={{overflowX:'auto'}}>
+            <div className="chain-row chain-h">
+              <span>CE LTP</span><span>CE OI</span><span>CE IV%</span><span>STRIKE</span>
+              <div/><span>PE IV%</span><span>PE OI</span><span>PE LTP</span>
+            </div>
+            {chain.map((r,i)=>{
+              const atm=snap?.market?.BANKNIFTY?.ltp?Math.round(snap.market.BANKNIFTY.ltp/100)*100:54000;
+              const isAtm=Math.abs(r.strike-atm)<=50;
+              return(
+                <div key={i} className={`chain-row${isAtm?' atm-row':''}`}>
+                  <span className="yel">{r.ce_ltp||'—'}</span>
+                  <span style={{color:'#64748b',fontSize:10}}>{r.ce_oi>0?(r.ce_oi/100).toFixed(0)+'L':'—'}</span>
+                  <span style={{color:'#94a3b8',fontSize:10}}>{r.ce_iv?fmt(r.ce_iv,1)+'%':'—'}</span>
+                  <span style={{color:isAtm?'#f59e0b':'#e2e8f0',fontWeight:isAtm?700:400}}>{r.strike}</span>
+                  <div/>
+                  <span style={{color:'#94a3b8',fontSize:10}}>{r.pe_iv?fmt(r.pe_iv,1)+'%':'—'}</span>
+                  <span style={{color:'#64748b',fontSize:10}}>{r.pe_oi>0?(r.pe_oi/100).toFixed(0)+'L':'—'}</span>
+                  <span className="yel">{r.pe_ltp||'—'}</span>
+                </div>
+              );
+            })}
+            {!chain.length&&<div style={{color:'#334155',padding:'8px 0',fontSize:11}}>Waiting for option chain from bridge…</div>}
+          </div>
+        </div>
+      )}
+
+      {tab==='signals'&&(
+        <div className="card">
+          <div className="ct">Strategy Signals — live from bot strategy engine</div>
+          {signals.map((s,i)=>(
+            <div key={i} className="sig">
+              <div style={{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:4,marginBottom:2}}>
+                <span style={{color:'#f59e0b',fontWeight:600}}>{s.strategy}</span>
+                <span style={{color:s.direction==='CE'?'#34d399':s.direction==='PE'?'#f87171':'#c084fc'}}>{s.symbol} {s.strike} {s.direction}</span>
+                <span className={`pill ${s.strength==='GODMODE'?'p':s.strength==='STRONG'?'g':s.strength==='MODERATE'?'y':'gr'}`}>{s.strength}</span>
+                <span style={{color:'#334155',fontSize:10}}>{s.ts}</span>
+              </div>
+              <div style={{fontSize:11,color:'#64748b'}}>Entry@{s.entry_trigger} · SL-{s.sl_pct}% · T1+{s.t1_pct}% · T2+{s.t2_pct}%</div>
+              <div style={{fontSize:11,color:'#94a3b8',fontStyle:'italic',marginTop:2}}>{s.reason}</div>
+              {s.ok?.length>0&&<div style={{fontSize:10,color:'#34d399',marginTop:1}}>✓ {(s.ok||[]).join(' · ')}</div>}
+              {s.fail?.length>0&&<div style={{fontSize:10,color:'#f87171',marginTop:1}}>✗ {(s.fail||[]).join(' · ')}</div>}
+            </div>
+          ))}
+          {!signals.length&&<div style={{color:'#334155',padding:'8px 0',fontSize:11}}>No signals yet. Start bot — signals appear after 9:20 AM entry window opens.</div>}
+        </div>
+      )}
+
+      {tab==='dashboard'&&(
+        <div>
+          <div className="g4" style={{marginBottom:6}}>
+            <div className="m"><div className="ml">CAPITAL</div><div className="mv" style={{color:'#f59e0b'}}>{fmtRs(capital)}</div><div className="ms">Start ₹50K</div></div>
+            <div className="m"><div className="ml">TOTAL GROWTH</div><div className={`mv ${col(growth)}`}>{fmtP(growth)}</div><div className="ms">{fmtRs(totalPnl)} net</div></div>
+            <div className="m"><div className="ml">BOT P&L TODAY</div><div className={`mv ${col(stats.daily_pnl_rs)}`}>{fmtRs(stats.daily_pnl_rs||0)}</div><div className="ms">{stats.daily_count||0}/{snap?.daily_stats?.total_trades===undefined?3:3} trades</div></div>
+            <div className="m"><div className="ml">WIN RATE</div><div className="mv" style={{color:'#60a5fa'}}>{fmt(wr,0)}%</div><div className="ms">{wins}W/{closed.length-wins}L</div></div>
+          </div>
+          {openTrades.map(t=>(
+            <div key={t.id} className={`tc ${+t.pnl_pct>=0?'tc-pos':'tc-neg'}`}>
+              <div style={{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:4,marginBottom:3}}>
+                <span style={{color:'#c084fc',fontWeight:700}}>[{t.id}] {t.instrument} {t.strike}{t.option_type}</span>
+                <span className={col(t.pnl_pct)} style={{fontWeight:700,fontSize:14}}>{fmtP(t.pnl_pct)} | {fmtRs(t.pnl_rs)}</span>
+                <button className="btn btn-r" style={{padding:'2px 7px',fontSize:10}} onClick={()=>cmdBot({cmd:'close_trade',trade_id:t.id})}>Exit</button>
+              </div>
+              <div style={{fontSize:11,color:'#64748b',display:'flex',gap:10,flexWrap:'wrap'}}>
+                <span>₹{fmt(t.entry_premium,0)}→₹{fmt(t.current_premium,0)}</span>
+                <span>SL-{t.sl_pct}%</span>
+                <span style={{color:t.t1_booked?'#34d399':'inherit'}}>T1+{t.t1_pct}%{t.t1_booked?' ✓':''}</span>
+                <span>T2+{t.t2_pct}%</span><span>{t.strategy}</span><span>{t.entry_time}</span>
+              </div>
+            </div>
+          ))}
+          {dec&&(
+            <div className="dec">
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:4,flexWrap:'wrap',gap:4}}>
+                <span style={{color:ACT_COL[dec.action]||'#e2e8f0',fontWeight:700,fontSize:14}}>{dec.action} {dec.action==='BUY'?`— ${dec.instrument} ${dec.strike}${dec.option_type}`:''}</span>
+                <span className={`pill ${dec.confidence==='GODMODE'?'p':dec.confidence==='HIGH'?'g':'y'}`}>{dec.confidence} {dec.confidence_score}/100</span>
+              </div>
+              {dec.action==='BUY'&&<div style={{color:'#94a3b8',fontSize:12,marginBottom:4}}>@{dec.entry_at_index} · SL@{dec.sl_index_level} · T1+{dec.t1_premium_pct}% · T2+{dec.t2_premium_pct}% · {dec.lots}L · {dec.strategy} · Out:{dec.exit_by}</div>}
+              <div style={{fontSize:12,color:'#cbd5e1',fontStyle:'italic'}}>{dec.reasoning}</div>
+              {dec.key_risk&&<div style={{fontSize:11,color:'#fbbf24',marginTop:3}}>⚠ {dec.key_risk}</div>}
+              {dec.flags&&<div className="flags">{Object.entries(dec.flags).map(([k,v])=><span key={k} className={`flag ${v?'fok':'fno'}`}>{k.replace(/_/g,' ')}</span>)}</div>}
+            </div>
+          )}
+          <div className="card">
+            <div className="ct"><span>Activity</span><button className="btn" style={{padding:'1px 5px',fontSize:9}} onClick={()=>setLogs([])}>clr</button></div>
+            <div style={{maxHeight:130,overflowY:'auto'}}>
+              {logs.slice(0,25).map((l,i)=><div key={i} className="log-line"><span style={{color:'#1e293b',marginRight:5}}>{l.t}</span><span style={{color:l.c}}>{l.msg}</span></div>)}
+              {!logs.length&&<div style={{color:'#1e293b',padding:'5px 0'}}>Start bot or click ⚡ AI</div>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab==='trades'&&(
+        <div>
+          <div className="card" style={{marginBottom:6}}>
+            <div className="ct">Open positions (bot-managed)</div>
+            {!openTrades.length?<div style={{color:'#334155',padding:'5px 0',fontSize:11}}>No open positions.</div>:openTrades.map(t=>(
+              <div key={t.id} className={`tc ${+t.pnl_pct>=0?'tc-pos':'tc-neg'}`} style={{marginBottom:4}}>
+                <div style={{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:4,marginBottom:2}}>
+                  <span style={{color:'#c084fc',fontWeight:600}}>[{t.id}] {t.instrument} {t.strike}{t.option_type} {t.expiry}</span>
+                  <span className={col(t.pnl_pct)} style={{fontWeight:700}}>{fmtP(t.pnl_pct)} | {fmtRs(t.pnl_rs)}</span>
+                  <button className="btn btn-r" style={{padding:'2px 7px',fontSize:10}} onClick={()=>cmdBot({cmd:'close_trade',trade_id:t.id})}>Exit</button>
+                </div>
+                <div style={{fontSize:11,color:'#64748b',display:'flex',gap:10,flexWrap:'wrap'}}>
+                  <span>{t.lots}L · ₹{fmt(t.entry_premium,0)}→₹{fmt(t.current_premium,0)}</span>
+                  <span>SL-{t.sl_pct}%</span>
+                  <span style={{color:t.t1_booked?'#34d399':'inherit'}}>T1+{t.t1_pct}%{t.t1_booked?' ✓':''}</span>
+                  <span>T2+{t.t2_pct}%</span><span>{t.strategy}</span><span>{t.entry_time}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="card">
+            <div className="ct">Closed (journal)</div>
+            {closed.slice(0,20).map(t=>(
+              <div key={t.id} className="row">
+                <span style={{color:'#64748b',fontSize:10}}>[{t.id}]</span>
+                <span style={{fontSize:11}}>{t.instrument} {t.strike}{t.option_type}</span>
+                <span className={col(t.pnl_pct)} style={{fontWeight:600}}>{fmtP(t.pnl_pct)}</span>
+                <span className={col(t.pnl_rs)}>{fmtRs(t.pnl_rs)}</span>
+                <span style={{color:'#334155',fontSize:10}}>{t.exit_reason}</span>
+                <span style={{color:'#334155',fontSize:10}}>{t.strategy}</span>
+              </div>
+            ))}
+            {!closed.length&&<div style={{color:'#334155',padding:'5px 0',fontSize:11}}>No closed trades yet.</div>}
+          </div>
+        </div>
+      )}
+
+      {tab==='decisions'&&(
+        <div>
+          {decisions.map((d,i)=>(
+            <div key={i} className="dec" style={{marginBottom:5}}>
+              <div style={{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:4,marginBottom:3}}>
+                <span style={{color:ACT_COL[d.action]||'#e2e8f0',fontWeight:700}}>{d.action} {d.action==='BUY'?`${d.instrument} ${d.strike}${d.option_type}`:''}</span>
+                <span className={`pill ${d.confidence==='GODMODE'?'p':d.confidence==='HIGH'?'g':'y'}`}>{d.confidence} {d.confidence_score}/100</span>
+                <span style={{color:'#1e293b',fontSize:10}}>{d._ts}</span>
+              </div>
+              {d.action==='BUY'&&<div style={{color:'#f59e0b',fontSize:11,marginBottom:3}}>@{d.entry_at_index} · SL@{d.sl_index_level} · T1+{d.t1_premium_pct}% · T2+{d.t2_premium_pct}% · {d.lots}L · {d.strategy} · Out:{d.exit_by}</div>}
+              <div style={{fontSize:11,color:'#94a3b8',fontStyle:'italic'}}>{d.reasoning}</div>
+              {d.key_risk&&<div style={{fontSize:11,color:'#fbbf24',marginTop:3}}>⚠ {d.key_risk}</div>}
+              {d.flags&&<div className="flags">{Object.entries(d.flags).map(([k,v])=><span key={k} className={`flag ${v?'fok':'fno'}`}>{k.replace(/_/g,' ')}</span>)}</div>}
+            </div>
+          ))}
+          {!decisions.length&&<div style={{color:'#334155',textAlign:'center',padding:24,fontSize:12}}>No decisions yet. Start bot or click ⚡ AI.</div>}
+        </div>
+      )}
+
+      {tab==='journal'&&(
+        <div>
+          <div className="g4" style={{marginBottom:6}}>
+            <div className="m"><div className="ml">TRADES</div><div className="mv">{closed.length}</div></div>
+            <div className="m"><div className="ml">WIN RATE</div><div className="mv" style={{color:'#60a5fa'}}>{fmt(wr,0)}%</div></div>
+            <div className="m"><div className="ml">NET P&L</div><div className={`mv ${col(totalPnl)}`}>{fmtRs(totalPnl)}</div></div>
+            <div className="m"><div className="ml">AVG/TRADE</div><div className={`mv ${col(totalPnl/(closed.length||1))}`}>{fmtRs(totalPnl/(closed.length||1))}</div></div>
+          </div>
+          <div className="card" style={{marginBottom:6}}>
+            <div className="ct">Strategy breakdown</div>
+            {['S1_ORB','S2_SR','S3_GAP','S4_TREND','S5_VWAP','S6_ENG','S7_EMA','S8_STR','S9_GAMMA','S10_15M'].map(s=>{
+              const ts2=closed.filter(t=>t.strategy===s);if(!ts2.length)return null;
+              const w2=ts2.filter(t=>t.pnl_rs>0).length;const p=ts2.reduce((s2,t)=>s2+(t.pnl_rs||0),0);
+              return(<div key={s} className="row">
+                <span style={{color:'#f59e0b',minWidth:70}}>{s}</span>
+                <span>{ts2.length}T</span>
+                <span style={{color:'#60a5fa'}}>{fmt(w2/ts2.length*100,0)}%WR</span>
+                <span className={col(p)}>{fmtRs(p)}</span>
+              </div>);
+            })}
+            {!closed.length&&<div style={{color:'#334155',padding:'5px 0',fontSize:11}}>No trades yet.</div>}
+          </div>
+          {closed.map(t=>(
+            <div key={t.id} className="card" style={{marginBottom:4}}>
+              <div style={{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:4,marginBottom:2}}>
+                <span style={{color:'#f59e0b'}}>{t.instrument} {t.strike}{t.option_type}</span>
+                <span className={col(t.pnl_pct)} style={{fontWeight:600}}>{fmtP(t.pnl_pct)} | {fmtRs(t.pnl_rs)}</span>
+                <span style={{color:'#334155',fontSize:10}}>{t.strategy} {t.exit_reason}</span>
+              </div>
+              <div style={{fontSize:11,color:'#64748b',fontStyle:'italic'}}>{t.reasoning}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab==='learn'&&(
+        <div>
+          <div className="info">After each session, Claude reviews all trades, grades itself, identifies patterns in losses, and suggests specific improvements for next session.</div>
+          <button className="btn btn-p" onClick={selfLearn} disabled={learnLoad||closed.length<3} style={{width:'100%',padding:8,marginBottom:8,fontSize:12}}>
+            {learnLoad?'Analyzing…':'📚 Run Self-Analysis'}
+          </button>
+          {closed.length<3&&<div className="warn">Need 3+ closed trades. Current: {closed.length}</div>}
+          {learnRep&&(<>
+            <div className="card" style={{marginBottom:6}}>
+              <div className="ct">Performance Grade</div>
+              <div style={{fontSize:40,fontWeight:700,color:learnRep.grade==='A'?'#34d399':learnRep.grade==='B'?'#60a5fa':learnRep.grade==='C'?'#fbbf24':'#f87171'}}>{learnRep.grade}</div>
+              <div style={{fontSize:12,color:'#94a3b8',marginTop:5,lineHeight:1.7}}>{learnRep.win_rate_analysis}</div>
+            </div>
+            <div className="card" style={{marginBottom:6}}>
+              <div className="ct">Top Mistakes</div>
+              {(learnRep.top_mistakes||[]).map((m,i)=><div key={i} style={{padding:'4px 0',borderBottom:'1px solid #060a12',fontSize:11,color:'#f87171'}}><span style={{color:'#334155',marginRight:6}}>{i+1}.</span>{m}</div>)}
+            </div>
+            <div className="card" style={{marginBottom:6}}>
+              <div className="ct">Improvements for Next Session</div>
+              {(learnRep.improvements||[]).map((m,i)=><div key={i} style={{padding:'4px 0',borderBottom:'1px solid #060a12',fontSize:11,color:'#34d399'}}><span style={{color:'#334155',marginRight:6}}>{i+1}.</span>{m}</div>)}
+            </div>
+            <div className="card">
+              <div className="ct">Next Week Focus</div>
+              <div style={{fontSize:12,color:'#f59e0b',lineHeight:1.7}}>{learnRep.next_week_focus}</div>
+              {learnRep.strategy_ranking&&<div style={{fontSize:11,color:'#64748b',marginTop:5}}>Best: <span className="pos">{learnRep.strategy_ranking.best}</span> · Worst: <span className="neg">{learnRep.strategy_ranking.worst}</span></div>}
+            </div>
+          </>)}
+        </div>
+      )}
+
+      {tab==='setup'&&(
+        <div>
+          <div className="suc">This dashboard reads directly from your running Python bot via ngrok — real Upstox tick data, zero manual input.</div>
+          <div className="card" style={{marginBottom:7}}>
+            <div className="ct">ngrok Bridge URL</div>
+            <div className="fld">
+              <label>Paste your ngrok HTTPS URL (e.g. https://a1b2c3.ngrok-free.app)</label>
+              <input value={bridgeUrl} onChange={e=>{setBridgeUrl(e.target.value);save('bUrl',e.target.value);}} placeholder="https://xxxx.ngrok-free.app"/>
+            </div>
+            <div style={{display:'flex',gap:6,marginTop:5}}>
+              <button className="btn" onClick={async()=>{
+                try{const r=await fetch(`${bridgeUrl.replace(/\/$/,'')}/api/health`,{signal:AbortSignal.timeout(3000)});
+                if(r.ok){setBridgeOk(true);log2('Bridge connected ✓','success');}
+                else{setBridgeOk(false);log2('Bridge error','error');}}
+                catch(e){setBridgeOk(false);log2('Bridge unreachable: '+e.message,'error');}
+              }}>Test Connection</button>
+              {bridgeOk&&<span className="pill g">✓ Connected</span>}
+              {!bridgeOk&&bridgeUrl&&<span className="pill r">✗ Offline</span>}
+              <button className="btn" onClick={()=>cmdBot({cmd:'reset_day'})}>Reset Day</button>
+              <button className="btn btn-r" onClick={()=>{setClosed([]);setCapital(50000);capRef.current=50000;save('cap',50000);save('closedT',[]);log2('Data cleared','warn');}}>Clear Data</button>
+            </div>
+          </div>
+          <div className="card" style={{marginBottom:7}}>
+            <div className="ct">Daily startup sequence</div>
+            <pre>{`# 1. Get fresh Upstox token (every morning before 9 AM)
+python get_token.py
+
+# 2. Update KEY_LEVELS in config.py for today
+
+# 3. Start the bot
+python main.py
+# → Bot starts, API bridge auto-starts on port 5003
+
+# 4. New terminal — start ngrok
+ngrok http 5003
+# → Copy the https://xxxx.ngrok-free.app URL above
+
+# 5. Open this file in Chrome
+# → Paste ngrok URL → Test → START
+# → All data syncs automatically every 5 seconds`}
+            </pre>
+          </div>
+          <div className="card">
+            <div className="ct">Paper trading week → live trading path</div>
+            <div style={{fontSize:12,color:'#94a3b8',lineHeight:1.9}}>
+              <div><span className="pill g" style={{marginRight:6}}>Week 1</span>Paper trade. Target <span className="yel">60%+ monthly growth</span> with consistent execution.</div>
+              <div style={{marginTop:4}}><span className="pill b" style={{marginRight:6}}>Week 2</span>Share journal results. I build live_bridge.py for Upstox + Zerodha both accounts.</div>
+              <div style={{marginTop:4}}><span className="pill p" style={{marginRight:6}}>Week 3</span>Set <code>EXECUTION_MODE=LIVE</code> in .env. Real orders fire. Bot runs 9:20–14:00.</div>
+              <div style={{marginTop:4}}><span className="pill g" style={{marginRight:6}}>12 months</span>₹50K → ₹14L via 60%/month compounding. Capital recalculates lot sizes automatically.</div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

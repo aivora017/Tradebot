@@ -91,6 +91,17 @@ class OptionRow:
     pe_oi_chg: int
     pe_iv:     float
     pe_vol:    int
+    # ── P2.1: Full Greeks (populated from option_greeks in Upstox chain API) ──
+    # CE greeks — positive delta for calls
+    ce_delta:  float = 0.0
+    ce_gamma:  float = 0.0
+    ce_theta:  float = 0.0
+    ce_vega:   float = 0.0
+    # PE greeks — delta is negative for puts (stored as-is, e.g. -0.45)
+    pe_delta:  float = 0.0
+    pe_gamma:  float = 0.0
+    pe_theta:  float = 0.0
+    pe_vega:   float = 0.0
 
 
 class CandleBuilder:
@@ -164,6 +175,15 @@ class MarketDataFeed:
         self._pcr:       Dict[str, float] = {"NIFTY": 1.0, "BANKNIFTY": 1.0}
         self._chain:     Dict[str, List[OptionRow]] = {}
         self._max_pain:  Dict[str, float] = {}
+        # ── P2.1: Rolling IV history for intraday percentile computation ──
+        # Keyed as "SYMBOL_ce" / "SYMBOL_pe". Holds ATM IV samples every ~30s.
+        # maxlen = IV_HISTORY_WINDOW (~20 min of data at 30s poll interval)
+        self._iv_history: Dict[str, deque] = {
+            "NIFTY_ce":     deque(maxlen=config.IV_HISTORY_WINDOW),
+            "NIFTY_pe":     deque(maxlen=config.IV_HISTORY_WINDOW),
+            "BANKNIFTY_ce": deque(maxlen=config.IV_HISTORY_WINDOW),
+            "BANKNIFTY_pe": deque(maxlen=config.IV_HISTORY_WINDOW),
+        }
         self._lock       = threading.RLock()
         self._callbacks: List[Callable[[Tick], None]] = []
         self._stop       = threading.Event()
@@ -218,6 +238,91 @@ class MarketDataFeed:
     def get_max_pain(self, symbol: str) -> float:
         with self._lock:
             return self._max_pain.get(symbol, 0.0)
+
+    def get_iv_percentile(self, symbol: str) -> float:
+        """
+        Intraday IV percentile (0–100) based on rolling ATM CE IV history.
+        Uses last IV_HISTORY_WINDOW samples (~20 min at 30s poll interval).
+        NOTE: This is an INTRADAY percentile — useful as a spike detector,
+        not a 52-week percentile. Returns 0.0 if fewer than 5 samples exist.
+        """
+        with self._lock:
+            hist = list(self._iv_history.get(f"{symbol}_ce", []))
+        if len(hist) < 5:
+            return 0.0
+        current = hist[-1]
+        below = sum(1 for v in hist[:-1] if v < current)
+        return round(below / (len(hist) - 1) * 100, 1)
+
+    def get_greeks(self, symbol: str) -> dict:
+        """
+        Returns structured Greeks snapshot for ATM and ±1 strikes.
+        Called by ClaudeAnalyst._build_packet() for Delta/IV entry gating.
+
+        Returned structure:
+        {
+          "atm_strike": 54000,
+          "iv_percentile": 65.2,
+          "atm_ce_iv": 18.5, "atm_pe_iv": 19.2,
+          "delta_ok_ce": True,   # ce_delta >= DELTA_MIN_ENTRY
+          "delta_ok_pe": True,   # |pe_delta| >= DELTA_MIN_ENTRY
+          "iv_overpriced": False, # iv_percentile > IV_PCTILE_HIGH
+          "strikes": {
+            "-1": {"strike": 53900, "ce_delta": 0.38, ...},
+            "atm": {"strike": 54000, "ce_delta": 0.48, ...},
+            "+1": {"strike": 54100, "ce_delta": 0.58, ...},
+          }
+        }
+        """
+        chain = self.get_chain(symbol)
+        tick  = self.get_tick(symbol)
+        if not chain or not tick or tick.ltp == 0:
+            return {"atm_strike": 0, "iv_percentile": 0.0,
+                    "delta_ok_ce": False, "delta_ok_pe": False,
+                    "iv_overpriced": False, "strikes": {}}
+
+        step = 100 if "BANK" in symbol else 50
+        atm  = round(tick.ltp / step) * step
+
+        iv_pct = self.get_iv_percentile(symbol)
+
+        strikes_data = {}
+        for row in chain:
+            diff = row.strike - atm
+            if abs(diff) > step:
+                continue  # only ATM and ±1
+            offset = int(round(diff / step))
+            label  = "atm" if offset == 0 else (f"+{offset}" if offset > 0 else str(offset))
+            strikes_data[label] = {
+                "strike":   row.strike,
+                "ce_ltp":   row.ce_ltp,
+                "ce_delta": round(row.ce_delta, 3),
+                "ce_gamma": round(row.ce_gamma, 4),
+                "ce_theta": round(row.ce_theta, 2),
+                "ce_vega":  round(row.ce_vega,  2),
+                "ce_iv":    round(row.ce_iv,    2),
+                "pe_ltp":   row.pe_ltp,
+                "pe_delta": round(row.pe_delta, 3),
+                "pe_gamma": round(row.pe_gamma, 4),
+                "pe_theta": round(row.pe_theta, 2),
+                "pe_vega":  round(row.pe_vega,  2),
+                "pe_iv":    round(row.pe_iv,    2),
+            }
+
+        atm_row = strikes_data.get("atm", {})
+        ce_delta_atm = atm_row.get("ce_delta", 0.0)
+        pe_delta_atm = atm_row.get("pe_delta", 0.0)
+
+        return {
+            "atm_strike":    atm,
+            "iv_percentile": iv_pct,
+            "atm_ce_iv":     atm_row.get("ce_iv", 0.0),
+            "atm_pe_iv":     atm_row.get("pe_iv", 0.0),
+            "delta_ok_ce":   ce_delta_atm >= config.DELTA_MIN_ENTRY,
+            "delta_ok_pe":   abs(pe_delta_atm) >= config.DELTA_MIN_ENTRY,
+            "iv_overpriced": (iv_pct > config.IV_PCTILE_HIGH) if iv_pct > 0 else False,
+            "strikes":       strikes_data,
+        }
 
     def get_candles(self, symbol: str, interval: str = "5m", n: int = 100) -> List[Candle]:
         builder = {"1m": self.c1m, "5m": self.c5m, "15m": self.c15m}.get(interval, self.c5m)
@@ -693,7 +798,7 @@ class MarketDataFeed:
             for row in r.json().get("data", []):
                 # market_data fields per official docs:
                 # ltp, volume, oi, close_price, bid_price, ask_price, prev_oi
-                # IV is under option_greeks.iv NOT market_data
+                # Greeks (delta, gamma, theta, vega) + IV are under option_greeks
                 ce_data    = row.get("call_options", {})
                 pe_data    = row.get("put_options",  {})
                 ce         = ce_data.get("market_data", {})
@@ -710,16 +815,25 @@ class MarketDataFeed:
                 rows.append(OptionRow(
                     strike    = float(row.get("strike_price", 0)),
                     expiry    = expiry_str,
-                    ce_ltp    = float(ce.get("ltp")         or 0),
+                    ce_ltp    = float(ce.get("ltp")           or 0),
                     ce_oi     = ce_oi,
                     ce_oi_chg = ce_oi - ce_prev_oi,
-                    ce_iv     = float(ce_greeks.get("iv")   or 0),  # IV in option_greeks
-                    ce_vol    = int(ce.get("volume")         or 0),
-                    pe_ltp    = float(pe.get("ltp")         or 0),
+                    ce_iv     = float(ce_greeks.get("iv")     or 0),
+                    ce_vol    = int(ce.get("volume")           or 0),
+                    pe_ltp    = float(pe.get("ltp")           or 0),
                     pe_oi     = pe_oi,
                     pe_oi_chg = pe_oi - pe_prev_oi,
-                    pe_iv     = float(pe_greeks.get("iv")   or 0),  # IV in option_greeks
-                    pe_vol    = int(pe.get("volume")         or 0),
+                    pe_iv     = float(pe_greeks.get("iv")     or 0),
+                    pe_vol    = int(pe.get("volume")           or 0),
+                    # ── P2.1: Full Greeks ─────────────────────────────────
+                    ce_delta  = float(ce_greeks.get("delta")  or 0),
+                    ce_gamma  = float(ce_greeks.get("gamma")  or 0),
+                    ce_theta  = float(ce_greeks.get("theta")  or 0),
+                    ce_vega   = float(ce_greeks.get("vega")   or 0),
+                    pe_delta  = float(pe_greeks.get("delta")  or 0),
+                    pe_gamma  = float(pe_greeks.get("gamma")  or 0),
+                    pe_theta  = float(pe_greeks.get("theta")  or 0),
+                    pe_vega   = float(pe_greeks.get("vega")   or 0),
                 ))
 
             if not rows:
@@ -733,6 +847,27 @@ class MarketDataFeed:
                 self._chain[symbol]    = rows
                 self._pcr[symbol]      = pcr
                 self._max_pain[symbol] = mp
+
+            # ── P2.1: Track ATM IV for intraday percentile ────────────────
+            # Identify ATM strike based on current LTP, append CE/PE IV to history
+            ltp_now = self.get_ltp(symbol)
+            if ltp_now > 0 and rows:
+                step_size = 100 if "BANK" in symbol else 50
+                atm_val   = round(ltp_now / step_size) * step_size
+                for opt_row in rows:
+                    if opt_row.strike == atm_val:
+                        with self._lock:
+                            if opt_row.ce_iv > 0:
+                                self._iv_history[f"{symbol}_ce"].append(opt_row.ce_iv)
+                            if opt_row.pe_iv > 0:
+                                self._iv_history[f"{symbol}_pe"].append(opt_row.pe_iv)
+                        log.debug(
+                            f"Greeks ATM {symbol} {atm_val:.0f}: "
+                            f"CE δ={opt_row.ce_delta:.2f} γ={opt_row.ce_gamma:.4f} "
+                            f"θ={opt_row.ce_theta:.2f} IV={opt_row.ce_iv:.1f}% | "
+                            f"PE δ={opt_row.pe_delta:.2f} IV={opt_row.pe_iv:.1f}%"
+                        )
+                        break
 
             log.debug(f"Chain {symbol} | Rows={len(rows)} | PCR={pcr} | MaxPain={mp:.0f}")
 

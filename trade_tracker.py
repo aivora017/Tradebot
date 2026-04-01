@@ -111,7 +111,7 @@ class TradeTracker:
                    lots: int, capital_locked: float, sl_pct: float,
                    sl_index: float, t1_pct: float, t2_pct: float,
                    exit_by: str, instrument_key: str = "",
-                   order_id: str = "") -> Optional[Trade]:
+                   order_id: str = "", notes: str = "") -> Optional[Trade]:
         with self._lock:
             if self._stopped:
                 log.warning("Stop flag active — no new trades.")
@@ -134,7 +134,7 @@ class TradeTracker:
                 capital_locked=capital_locked, sl_pct=sl_pct,
                 sl_index=sl_index, t1_pct=t1_pct, t2_pct=t2_pct,
                 exit_by=exit_by, instrument_key=instrument_key,
-                order_id=order_id,
+                order_id=order_id, notes=notes,
             )
             self._trades[tid] = trade
             self._daily_count += 1
@@ -153,9 +153,25 @@ class TradeTracker:
             t = self._trades.get(trade_id)
             if t and t.is_open:
                 t.current_premium = current_premium
-                if t.pnl_pct <= -(t.sl_pct * 0.8) and t.pnl_pct > -(t.sl_pct):
+                # Only warn if there is a meaningful SL set (> 1%) to avoid spam
+                # when SL is trailed to breakeven (0.0) and price oscillates near entry
+                if t.sl_pct > 0.01 and t.pnl_pct <= -(t.sl_pct * 0.8) and t.pnl_pct > -(t.sl_pct):
                     self._push_alert("SL_WARNING", trade_id,
                                      f"⚠️ SL WARNING [{trade_id}]: P&L {t.pnl_pct_display}")
+
+    def update_sl(self, trade_id: str, new_sl_pct: float):
+        """
+        Update SL percentage on an open trade.
+        Used for trail SL to breakeven after T1 hit:
+          new_sl_pct = 0.0 → SL triggers when premium falls back to entry (breakeven).
+        Thread-safe. No-op if trade is closed.
+        """
+        with self._lock:
+            t = self._trades.get(trade_id)
+            if t and t.is_open:
+                old_sl = t.sl_pct
+                t.sl_pct = new_sl_pct
+                log.info(f"🔒 SL trailed [{trade_id}]: {old_sl*100:.0f}% → {new_sl_pct*100:.0f}% (breakeven)")
 
     def book_t1(self, trade_id: str, exit_premium: float, qty_booked: int):
         with self._lock:
@@ -171,6 +187,7 @@ class TradeTracker:
             self._push_alert("T1_BOOKED", trade_id, msg)
 
     def close_trade(self, trade_id: str, exit_premium: float, reason: str):
+        closed_trade = None
         with self._lock:
             t = self._trades.get(trade_id)
             if not t or not t.is_open:
@@ -202,6 +219,16 @@ class TradeTracker:
             log.info(msg)
             self._push_alert("CLOSED", trade_id, msg)
             self._save()
+            closed_trade = t  # capture reference for memory recording (outside lock)
+
+        # ── Persistent memory: record this trade for self-evolution ───
+        # Done outside the tracker lock to avoid deadlocks with bot_memory's own lock.
+        if closed_trade is not None:
+            try:
+                from bot_memory import get_memory
+                get_memory().record_closed_trade(closed_trade)
+            except Exception as _mem_err:
+                log.debug(f"Memory record skipped: {_mem_err}")
 
     def check_exits(self) -> List[dict]:
         alerts = []
@@ -314,7 +341,22 @@ class TradeTracker:
         try:
             with open(config.TRADE_JOURNAL) as f:
                 data = json.load(f)
-                log.info(f"Loaded {len(data)} trades from journal.")
+            for d in data:
+                try:
+                    d["entry_time"] = datetime.fromisoformat(d["entry_time"])
+                    if d.get("exit_time"):
+                        d["exit_time"] = datetime.fromisoformat(d["exit_time"])
+                    t = Trade(**d)
+                    self._trades[t.id] = t
+                    if t.is_open:
+                        self._daily_count += 1
+                        self._daily_pnl   += 0  # open trades: unrealised, skip
+                    else:
+                        self._daily_pnl += t.realized_pnl_rs
+                except Exception as te:
+                    log.warning(f"Skipping malformed trade entry: {te}")
+            log.info(f"Restored {len(self._trades)} trades from journal "
+                     f"({len(self.get_open_trades())} open).")
         except FileNotFoundError:
             pass
         except Exception as e:

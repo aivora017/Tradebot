@@ -40,6 +40,14 @@ class WARRoom:
     """
 
     def __init__(self):
+        # ── Load compounded capital (yesterday's closing capital) ─────
+        from utils import load_compounded_capital
+        compounded = load_compounded_capital()
+        if compounded != config.TOTAL_CAPITAL:
+            log.info(f"📈 Compounded capital loaded: ₹{compounded:,.0f} "
+                     f"(base ₹{config.TOTAL_CAPITAL:,.0f})")
+            config.TOTAL_CAPITAL = compounded
+
         log.info("=" * 70)
         log.info("  ⚡  WAR ROOM BOT — NIFTY / BANK NIFTY OPTION BUYER")
         log.info(f"  Mode: {config.EXECUTION_MODE} | Capital: ₹{config.TOTAL_CAPITAL:,.0f}")
@@ -126,6 +134,21 @@ class WARRoom:
             stats["daily_pnl_rs"], stats["daily_pnl_pct"],
             stats["wins"], stats["losses"], stats["daily_count"]
         )
+
+        # ── Bot self-evolution: EOD pattern analysis ──────────────────
+        try:
+            from bot_memory import get_memory
+            get_memory().run_eod_analysis()
+        except Exception as _eod_err:
+            log.warning(f"EOD analysis skipped: {_eod_err}")
+
+        # ── Save closing capital for next session compounding ─────────
+        from utils import save_closing_capital
+        closing_capital = config.TOTAL_CAPITAL + stats["daily_pnl_rs"]
+        save_closing_capital(closing_capital)
+        log.info(f"💾 Closing capital saved: ₹{closing_capital:,.0f} "
+                 f"(today's P&L: ₹{stats['daily_pnl_rs']:+.0f})")
+
         log.info("=" * 70)
         log.info(f"DAY SUMMARY: P&L ₹{stats['daily_pnl_rs']:+.0f} "
                  f"({stats['daily_pnl_pct']:+.1f}%) | "
@@ -169,11 +192,19 @@ class WARRoom:
                 continue
             idx_move = tick.ltp - trade.entry_index
             delta    = 0.5
-            approx_prem = max(1.0, trade.entry_premium + delta * abs(idx_move) * (
-                1 if (trade.option_type == "CE" and idx_move > 0)
-                or (trade.option_type == "PE" and idx_move < 0)
-                else -0.8
-            ))
+            otype    = trade.option_type
+            if otype == "CE+PE":
+                # Straddle gains on any large move (gamma); loses on time decay only
+                # Approximate: premium rises with abs move, small bleed on flat market
+                move_gain = delta * abs(idx_move) * 0.5
+                time_decay = 0.0   # tracked by SL%, not here
+                approx_prem = max(1.0, trade.entry_premium + move_gain - time_decay)
+            else:
+                directional = (
+                    1 if (otype == "CE" and idx_move > 0) or (otype == "PE" and idx_move < 0)
+                    else -0.8
+                )
+                approx_prem = max(1.0, trade.entry_premium + delta * abs(idx_move) * directional)
             self.tracker.update_premium(trade.id, approx_prem)
 
     # ── Claude Decision Handler ────────────────────────────────────
@@ -209,6 +240,7 @@ class WARRoom:
         strike   = int(decision.get("strike", 0))
         otype    = decision.get("option_type", "CE")
         tier     = int(decision.get("tier", 2))
+        conf     = decision.get("confidence", "MEDIUM")   # must read here — not from caller scope
         sl_p     = float(decision.get("sl_premium_pct", 20)) / 100
         t1       = float(decision.get("t1_premium_pct", 50)) / 100
         t2       = float(decision.get("t2_premium_pct", 100)) / 100
@@ -231,26 +263,51 @@ class WARRoom:
             log.warning(f"🚫 Claude BUY blocked by risk: {reason}")
             return
 
+        # Map Claude's confidence to strength-based capital allocation
+        _conf_to_strength = {
+            "GODMODE": "GODMODE",
+            "HIGH":    "STRONG",
+            "MEDIUM":  "MODERATE",
+            "LOW":     "WEAK",
+        }
+        strength = _conf_to_strength.get(conf.upper(), "MODERATE")
+
         chain   = self.feed.get_chain(symbol)
         premium = 0.0
         for row in chain:
             if row.strike == strike:
-                premium = row.ce_ltp if "CE" in otype else row.pe_ltp
+                if otype == "CE+PE":
+                    premium = (row.ce_ltp or 0) + (row.pe_ltp or 0)   # straddle: both legs
+                elif "CE" in otype:
+                    premium = row.ce_ltp or 0
+                else:
+                    premium = row.pe_ltp or 0
                 break
         if premium == 0:
             premium = 200.0
             log.warning(f"Using fallback premium ₹{premium}")
 
-        cap, lots = self.risk.position_size(tier, vix, premium, symbol)
+        cap, lots = self.risk.position_size(tier, vix, premium, symbol, strength)
 
         if config.EXECUTION_MODE in ("LIVE", "PAPER"):
             _, expiry_str = next_expiry(symbol)
             result = self.orders.buy_option(
                 symbol=symbol, strike=strike, option_type=otype,
                 expiry_str=expiry_str, lots=lots, order_type="MARKET",
+                limit_price=premium,   # pass real premium so paper fills at correct price
             )
             if result.success:
                 fill_price = result.price if result.price > 0 else premium
+                # Build trade notes with Claude's full reasoning for journal review
+                trade_notes = (
+                    f"[{decision.get('confidence','?')}] "
+                    f"{decision.get('reasoning', '')} | "
+                    f"Mkt:{decision.get('market_type','?')} | "
+                    f"VIX:{decision.get('vix_status','?')} | "
+                    f"News:{decision.get('news_driver','NONE')} | "
+                    f"Risk:{decision.get('key_risk','?')} | "
+                    f"IdxReason:{decision.get('index_selection_reason','?')}"
+                )
                 trade = self.tracker.open_trade(
                     symbol=symbol, strike=strike, option_type=otype,
                     expiry=expiry_str, strategy=decision.get("strategy", "Claude"),
@@ -264,12 +321,38 @@ class WARRoom:
                     instrument_key=self.orders.build_instrument_key(
                         symbol, strike, otype, expiry_str),
                     order_id=result.order_id,
+                    notes=trade_notes,
                 )
                 if trade:
                     self.notify.trade_opened(
                         trade.id, symbol, strike, otype,
                         fill_price, lots, decision.get("strategy", "")
                     )
+                    # ── Persistent memory: capture full entry context ─────────
+                    try:
+                        from bot_memory import get_memory
+                        from utils import is_expiry_day
+                        entry_ctx = {
+                            # Claude's decision context
+                            "strategy":              decision.get("strategy", ""),
+                            "confidence":            conf,
+                            "reasoning":             decision.get("reasoning", ""),
+                            "market_type":           decision.get("market_type", ""),
+                            "vix_status":            decision.get("vix_status", ""),
+                            "news_driver":           decision.get("news_driver", "NONE"),
+                            "key_risk":              decision.get("key_risk", ""),
+                            "index_selection_reason": decision.get("index_selection_reason", ""),
+                            # Live market state at entry
+                            "vix":                   round(self.feed.get_vix(), 2),
+                            "session_bias":          getattr(config, "SESSION_BIAS", "NEUTRAL"),
+                            "gift_bias":             getattr(config, "GIFT_NIFTY_BIAS", ""),
+                            "monthly_bias":          config.MARKET_CONTEXT.get("monthly_bias", ""),
+                            "is_expiry_day":         is_expiry_day(),
+                            "entry_index_price":     round(self.feed.get_ltp(symbol), 2),
+                        }
+                        get_memory().attach_entry_context(trade.id, entry_ctx)
+                    except Exception as _mctx_err:
+                        log.debug(f"Memory context attach skipped: {_mctx_err}")
             else:
                 log.error(f"Order failed: {result.error}")
         else:
@@ -307,6 +390,11 @@ class WARRoom:
                         if config.EXECUTION_MODE in ("LIVE", "PAPER") and t1_qty > 0:
                             self.orders.close_position(trade.instrument_key, t1_qty)
                         self.tracker.book_t1(trade.id, trade.current_premium, t1_qty)
+                        # Trail SL to breakeven: remaining half rides free
+                        # SL_pct=0 → triggers when premium drops back to entry (no loss)
+                        if getattr(config, 'TRAIL_SL_TO_BREAKEVEN', True):
+                            self.tracker.update_sl(trade.id, 0.0)
+                            log.info(f"🔒 [{trade.id}] SL trailed to breakeven — T2 runs free")
 
                     elif atype == "T2_HIT":
                         self.notify.t2_hit(
@@ -352,10 +440,10 @@ class WARRoom:
                 if is_hard_exit_time():
                     open_trades = self.tracker.get_open_trades()
                     if open_trades:
-                        log.warning("⏰ 2:00 PM — FORCE CLOSING ALL OPEN POSITIONS")
+                        log.warning(f"⏰ {config.HARD_EXIT_TIME} — FORCE CLOSING ALL OPEN POSITIONS")
                         for t in open_trades:
                             self._close_trade(t, "EOD_FORCE_EXIT")
-                        self.notify.send("⏰ <b>2:00 PM — All positions force-closed.</b>")
+                        self.notify.send(f"⏰ <b>{config.HARD_EXIT_TIME} — All positions force-closed.</b>")
             except Exception as e:
                 log.error(f"EOD monitor error: {e}")
             time.sleep(30)

@@ -293,7 +293,7 @@ class Dashboard:
 
         expiry_note = ""
         if is_expiry_day():
-            expiry_note = " [bold red]⚡ EXPIRY DAY — EXIT BY 11:00 AM[/]"
+            expiry_note = f" [bold yellow]⚡ EXPIRY DAY — TRADE NORMALLY, EXIT {config.EXPIRY_EXIT_TIME}[/]"
 
         txt = Text()
         txt.append(f"  {zone}{expiry_note}   ")

@@ -117,6 +117,179 @@ def _token_valid(token: str) -> bool:
         return False
 
 
+# ── GIFT NIFTY: Fetch + Bias ──────────────────────────────────────
+
+# Upstox instrument keys to try for GIFT Nifty (first that returns LTP wins)
+_GIFT_KEYS = [
+    "NSE_INDEX|Gift Nifty",       # Upstox index quote — most likely
+    "NSE_FO|GIFTNIFTY",           # Upstox GIFT Nifty futures
+]
+
+NSE_GIFT_API = (
+    "https://www.nseindia.com/api/live-analysis-snapshots"
+    "?index=giftnifty"
+)
+
+
+def fetch_gift_nifty(token: str, nifty_prev_close: float) -> dict:
+    """
+    Fetch GIFT Nifty price and compute opening gap % vs Nifty prev close.
+
+    Try order:
+      1. Upstox LTP endpoint (multiple instrument key candidates)
+      2. NSE India GIFT Nifty API (NSE session required)
+      3. Graceful failure → price=0, bias=UNAVAILABLE
+
+    Returns:
+      {
+        "price":      23854.0,
+        "gap_pct":    1.82,
+        "bias":       "BULLISH_GAP",
+        "prev_close": 23430.5,
+        "updated_at": "08:52 IST",
+        "source":     "Upstox"
+      }
+    """
+    now_str = datetime.now().strftime("%H:%M IST")
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+    gift_price = 0.0
+    source     = "none"
+
+    # ── Source 1: Upstox LTP ─────────────────────────────────────
+    for key in _GIFT_KEYS:
+        try:
+            r = requests.get(
+                f"{UPSTOX_BASE}/market-quote/ltp",
+                headers=headers,
+                params={"instrument_key": key},
+                timeout=6,
+            )
+            if r.status_code == 200:
+                data = r.json().get("data", {})
+                # Response key uses colon format: e.g. "NSE_INDEX:Gift Nifty"
+                for _k, v in data.items():
+                    ltp = v.get("last_price", 0) or v.get("ltp", 0)
+                    if ltp and ltp > 10000:   # sanity — Nifty is >15000
+                        gift_price = float(ltp)
+                        source     = f"Upstox({key})"
+                        break
+            if gift_price > 0:
+                break
+        except Exception:
+            continue
+
+    # ── Source 2: NSE India GIFT Nifty API ───────────────────────
+    if gift_price == 0:
+        try:
+            nse_s = requests.Session()
+            nse_s.headers.update(NSE_HEADERS)
+            nse_s.get("https://www.nseindia.com", timeout=6)
+            r2 = nse_s.get(NSE_GIFT_API, timeout=8)
+            if r2.status_code == 200:
+                snap = r2.json()
+                # NSE returns list; first item or look for indicativeValue / lastPrice
+                if isinstance(snap, list) and snap:
+                    item = snap[0]
+                    ltp  = (item.get("lastPrice") or item.get("previousPrice")
+                            or item.get("indicativeValue") or 0)
+                    if ltp:
+                        gift_price = float(str(ltp).replace(",", ""))
+                        source     = "NSE"
+                elif isinstance(snap, dict):
+                    ltp = (snap.get("lastPrice") or snap.get("data", {}).get("lastPrice", 0))
+                    if ltp:
+                        gift_price = float(str(ltp).replace(",", ""))
+                        source     = "NSE"
+        except Exception as e:
+            print(yellow(f"  GIFT Nifty NSE source failed: {e}"))
+
+    # ── Compute Gap & Bias ────────────────────────────────────────
+    if gift_price <= 0 or nifty_prev_close <= 0:
+        return {
+            "price":      0.0,
+            "gap_pct":    0.0,
+            "bias":       "UNAVAILABLE",
+            "prev_close": nifty_prev_close,
+            "updated_at": now_str,
+            "source":     source,
+        }
+
+    gap_pct = round((gift_price - nifty_prev_close) / nifty_prev_close * 100, 3)
+    abs_gap = abs(gap_pct)
+
+    if abs_gap < 0.3:
+        bias = "FLAT"
+    elif gap_pct > 1.5:
+        bias = "BULLISH_GAP"
+    elif gap_pct > 0.3:
+        bias = "MILD_BULL"
+    elif gap_pct < -1.5:
+        bias = "BEARISH_GAP"
+    else:
+        bias = "MILD_BEAR"
+
+    return {
+        "price":      round(gift_price, 2),
+        "gap_pct":    gap_pct,
+        "bias":       bias,
+        "prev_close": round(nifty_prev_close, 2),
+        "updated_at": now_str,
+        "source":     source,
+    }
+
+
+def update_gift_nifty_config(gd: dict):
+    """
+    Patch GIFT_NIFTY_* values in config.py.
+    Uses a single regex block replace — same pattern as KEY_LEVELS/MARKET_CONTEXT.
+    Strips any null bytes before writing (defensive — mirrors null-byte bug fix).
+    """
+    print(bold("\n╔══ GIFT NIFTY: Updating config.py ══"))
+
+    bias       = gd.get("bias", "UNAVAILABLE")
+    price      = gd.get("price", 0.0)
+    gap_pct    = gd.get("gap_pct", 0.0)
+    prev_close = gd.get("prev_close", 0.0)
+    updated    = gd.get("updated_at", "")
+    source     = gd.get("source", "")
+
+    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # Strip null bytes (defensive — mirrors previous bug fix)
+    content = content.replace("\x00", "")
+
+    new_block = (
+        f'GIFT_NIFTY_PRICE      = {price}\n'
+        f'GIFT_NIFTY_GAP_PCT    = {gap_pct}\n'
+        f'GIFT_NIFTY_BIAS       = "{bias}"\n'
+        f'GIFT_NIFTY_PREV_CLOSE = {prev_close}\n'
+        f'GIFT_NIFTY_UPDATED    = "{updated}"'
+    )
+
+    content = re.sub(
+        r'GIFT_NIFTY_PRICE\s*=.*?GIFT_NIFTY_UPDATED\s*=\s*"[^"]*"',
+        new_block,
+        content,
+        flags=re.DOTALL,
+    )
+
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    # Verify no null bytes were introduced
+    with open(CONFIG_FILE, "rb") as f:
+        raw = f.read()
+    if b"\x00" in raw:
+        clean = raw.replace(b"\x00", b"")
+        with open(CONFIG_FILE, "wb") as f:
+            f.write(clean)
+        print(yellow("  ⚠ Null bytes stripped from config.py"))
+
+    print(green(f"  ✅ GIFT Nifty → {bias} | price={price:.0f} | gap={gap_pct:+.2f}% | src={source}"))
+
+
 # ── STEP 2: Fetch Market Data ─────────────────────────────────────
 
 def fetch_nse_option_chain(symbol: str, session: requests.Session):
@@ -194,13 +367,18 @@ def parse_chain(data: dict, symbol: str):
     # Max pain
     max_pain = _calc_max_pain(oi_by_strike)
 
-    # Resistance = top 3 CE OI strikes ABOVE atm
-    above = {s: v["ce_oi"] for s, v in oi_by_strike.items() if s > atm and v["ce_oi"] > 0}
+    # Only consider levels within 5% of ATM — deep OTM OI is historical noise
+    proximity = atm * 0.05
+
+    # Resistance = top 3 CE OI strikes ABOVE atm, within 5% range
+    above = {s: v["ce_oi"] for s, v in oi_by_strike.items()
+             if s > atm and s <= atm + proximity and v["ce_oi"] > 0}
     resistance = sorted(above, key=above.get, reverse=True)[:5]
     resistance = sorted(resistance)[:3]
 
-    # Support = top 3 PE OI strikes BELOW atm
-    below = {s: v["pe_oi"] for s, v in oi_by_strike.items() if s < atm and v["pe_oi"] > 0}
+    # Support = top 3 PE OI strikes BELOW atm, within 5% range
+    below = {s: v["pe_oi"] for s, v in oi_by_strike.items()
+             if s < atm and s >= atm - proximity and v["pe_oi"] > 0}
     support = sorted(below, key=below.get, reverse=True)[:5]
     support = sorted(support, reverse=True)[:3]
 
@@ -331,7 +509,7 @@ def update_config(bn: dict, n50: dict, vix: float):
 
 # ── STEP 4: Print War Plan ────────────────────────────────────────
 
-def print_war_plan(bn: dict, n50: dict, vix: float):
+def print_war_plan(bn: dict, n50: dict, vix: float, gift: dict = None):
     bn_ul  = bn.get("ul", 0)
     n50_ul = n50.get("ul", 0)
     pcr_bn = bn.get("pcr", 1.0)
@@ -343,6 +521,21 @@ def print_war_plan(bn: dict, n50: dict, vix: float):
                 "IDEAL ✅" if vix <= 22 else
                 "ELEVATED (prefer straddle)" if vix <= 28 else "EXTREME (skip)")
 
+    gift        = gift or {}
+    gift_price  = gift.get("price", 0)
+    gift_gap    = gift.get("gap_pct", 0)
+    gift_bias   = gift.get("bias", "UNAVAILABLE")
+    gift_line   = (f"{gift_price:.0f}  gap={gift_gap:+.2f}%  →  {gift_bias}"
+                   if gift_price > 0 else "NOT FETCHED (set to UNAVAILABLE)")
+
+    gift_implication = {
+        "BULLISH_GAP": "⬆ Strong gap up — S3 Gap-and-Go CE elevated. Avoid PE at open.",
+        "MILD_BULL":   "⬆ Mild gap up — CE bias, but watch for gap fade.",
+        "FLAT":        "◆ Flat open — S6 S/R and S2 Straddle elevated. Wait for direction.",
+        "MILD_BEAR":   "⬇ Mild gap down — PE bias at open.",
+        "BEARISH_GAP": "⬇ Strong gap down — S3 Gap-and-Go PE elevated. Avoid CE at open.",
+    }.get(gift_bias, "  GIFT Nifty data unavailable — proceed on technicals.")
+
     print(bold(cyan(f"""
 ╔══════════════════════════════════════════════════════╗
 ║         WAR PLAN — {datetime.now().strftime('%A %d %b %Y')}
@@ -352,6 +545,9 @@ def print_war_plan(bn: dict, n50: dict, vix: float):
 ║  India VIX:  {vix:.2f}  →  {vix_zone}
 ║  PCR BN:     {pcr_bn:.3f}  →  {bias}
 ║  Max Pain:   {mp_bn:,.0f}
+╠══ GIFT Nifty ════════════════════════════════════════╣
+║  {gift_line}
+║  {gift_implication}
 ╠══ BN Key Levels ════════════════════════════════════╣
 ║  Resistance: {bn.get('resistance', [])}
 ║  Support:    {bn.get('support', [])}
@@ -363,6 +559,7 @@ def print_war_plan(bn: dict, n50: dict, vix: float):
 ╠══ config.py ═════════════════════════════════════════╣
 ║  ✅ KEY_LEVELS auto-updated
 ║  ✅ MARKET_CONTEXT auto-updated
+║  ✅ GIFT_NIFTY_BIAS auto-updated
 ╚══════════════════════════════════════════════════════╝
     """)))
     print(f"  Now run: {green('python main.py')}")
@@ -450,11 +647,36 @@ def main():
         n50["prev_close"] = n50.get("ul", n50_ltp)
         print(green(f"  ✅ Nifty chain: PCR={n50['pcr']} MaxPain={n50['max_pain']}"))
 
-    # Step 3: Update config.py
+    # Step 3: Update config.py (KEY_LEVELS + MARKET_CONTEXT)
     update_config(bn, n50, vix)
 
+    # Step 3b: GIFT Nifty pre-market bias (P2.2)
+    print(bold("\n╔══ STEP 3b: GIFT Nifty Pre-Market Bias ══"))
+    nifty_prev = n50.get("ul", n50_ltp) or n50_ltp
+    if nifty_prev <= 0:
+        nifty_prev = n50_ltp
+    gift_data = fetch_gift_nifty(token, nifty_prev)
+    if gift_data["bias"] == "UNAVAILABLE":
+        print(yellow("  ⚠ GIFT Nifty unavailable — bias set to UNAVAILABLE. "
+                     "Claude will ignore GIFT Nifty section today."))
+    else:
+        bias_icon = {
+            "BULLISH_GAP": "🟢⬆",
+            "MILD_BULL":   "🟢",
+            "FLAT":        "◆",
+            "MILD_BEAR":   "🔴",
+            "BEARISH_GAP": "🔴⬇",
+        }.get(gift_data["bias"], "")
+        print(green(
+            f"  ✅ GIFT Nifty: {gift_data['price']:.0f} | "
+            f"Gap: {gift_data['gap_pct']:+.2f}% | "
+            f"Bias: {bias_icon} {gift_data['bias']} | "
+            f"Source: {gift_data['source']}"
+        ))
+    update_gift_nifty_config(gift_data)
+
     # Step 4: War plan
-    print_war_plan(bn, n50, vix)
+    print_war_plan(bn, n50, vix, gift_data)
 
 
 if __name__ == "__main__":

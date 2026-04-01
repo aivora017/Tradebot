@@ -36,8 +36,9 @@ VIX_KEY    = "NSE_INDEX|India VIX"
 BN_LTP_KEY = "NSE_INDEX|Nifty Bank"  # same key
 
 # Expiry weekdays
-NIFTY_EXP_WD = 1  # Tuesday
-BN_EXP_WD    = 2  # Wednesday
+NIFTY_EXP_WD = 1  # Tuesday — Nifty weekly
+# NOTE: BN_EXP_WD removed. BankNifty is MONTHLY only (last Tuesday of month).
+# Use bn_next_monthly_expiry() for BN option chain fetch.
 
 
 # ── Helpers ───────────────────────────────────────────────────────
@@ -56,12 +57,42 @@ def send_telegram(msg: str):
 
 
 def next_expiry(weekday: int) -> str:
+    """Next occurrence of given weekday (0=Mon…6=Sun). Used for Nifty weekly."""
     today = datetime.now()
     days  = (weekday - today.weekday()) % 7
     if days == 0 and today.hour >= 15:
         days = 7
     exp = today + timedelta(days=days)
     return exp.strftime("%Y-%m-%d")
+
+
+def bn_next_monthly_expiry() -> str:
+    """
+    BankNifty monthly expiry = last Tuesday of current (or next) month.
+    Mirrors utils.py next_expiry('BANKNIFTY') logic — always correct.
+    """
+    import calendar
+    today = datetime.now()
+    year, month = today.year, today.month
+
+    def last_tuesday(y: int, m: int) -> datetime:
+        last_day = calendar.monthrange(y, m)[1]
+        d = last_day
+        while datetime(y, m, d).weekday() != 1:  # 1 = Tuesday
+            d -= 1
+        return datetime(y, m, d)
+
+    last_tue = last_tuesday(year, month)
+    cutoff   = today.replace(hour=15, minute=30, second=0, microsecond=0)
+    # If this month's last Tuesday is past (or is today but after market close) → next month
+    if last_tue.date() < today.date() or \
+       (last_tue.date() == today.date() and today >= cutoff):
+        month += 1
+        if month > 12:
+            month, year = 1, year + 1
+        last_tue = last_tuesday(year, month)
+
+    return last_tue.strftime("%Y-%m-%d")
 
 
 def round_to(val: float, step: float) -> float:
@@ -355,8 +386,8 @@ def run() -> dict:
 
     # ── 4. Option Chain ────────────────────────────────────────────
     print("\n[4/5] Fetching option chains…")
-    bn_exp  = next_expiry(BN_EXP_WD)
-    n50_exp = next_expiry(NIFTY_EXP_WD)
+    bn_exp  = bn_next_monthly_expiry()           # last Tuesday of month — correct
+    n50_exp = next_expiry(NIFTY_EXP_WD)         # next weekly Tuesday — correct
 
     bn_mp, bn_ce_walls, bn_pe_walls, pcr_bn = fetch_chain_analysis(BN_KEY, bn_exp, 100.0)
     n50_mp, n50_ce_walls, n50_pe_walls, pcr_n50 = fetch_chain_analysis(NIFTY_KEY, n50_exp, 50.0)

@@ -118,14 +118,13 @@ RSS_SOURCES = [
 
 WEEKLY_CALENDAR: Dict[int, List[EconomicEvent]] = {
     0: [EconomicEvent("HSBC Manufacturing PMI Final", "09:15", "MEDIUM")],
-    1: [EconomicEvent("RBI Bulletin Release", "12:00", "HIGH")],
+    1: [EconomicEvent("Nifty Weekly Expiry", "15:30", "HIGH",
+                      note="Nifty weekly expiry every Tuesday. If also last Tue of month, BankNifty monthly co-expires — dual expiry day, elevated gamma for both."),
+        EconomicEvent("RBI Bulletin Release", "12:00", "HIGH")],
     2: [EconomicEvent("HSBC Services PMI", "09:15", "MEDIUM"),
         EconomicEvent("US ADP Employment", "18:15", "HIGH", currency="USD")],
-    3: [EconomicEvent("Nifty Weekly Expiry", "15:30", "HIGH",
-                      note="Max pain pull, gamma risk post 11 AM"),
-        EconomicEvent("BN Weekly Expiry", "15:30", "HIGH",
-                      note="BN expiry — exit all by 11 AM"),
-        EconomicEvent("US Jobless Claims", "18:00", "MEDIUM", currency="USD")],
+    # BankNifty monthly expiry = last Tuesday of month — detected dynamically via is_banknifty_expiry()
+    3: [EconomicEvent("US Jobless Claims", "18:00", "MEDIUM", currency="USD")],
     4: [EconomicEvent("US Non-Farm Payrolls (1st Fri)", "18:30", "HIGH",
                       currency="USD", note="Only first Friday of month")],
 }

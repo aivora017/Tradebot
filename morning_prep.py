@@ -503,8 +503,8 @@ def print_war_plan(data: dict):
     wd = now.weekday()
     edges = {
         0: "Monday — watch for gap fade or continuation. Gap and Go if GIFT aligned.",
-        1: "Tuesday — Nifty expiry day. Gamma scalp 9:15-9:35 ONLY. Exit by 11 AM.",
-        2: "Wednesday — BN expiry day. Gamma scalp 9:15-9:35 ONLY. Exit by 11 AM. Also historically high trending day.",
+        1: "Tuesday — Nifty expiry day. Gamma scalp bonus at 9:15-9:35, then ALL strategies run normally until 14:00.",
+        2: "Wednesday — BN expiry day. Gamma scalp bonus at 9:15-9:35, then ALL strategies run normally until 14:00. Historically high trending day.",
         3: "Thursday — High trending day historically. ORB + Trend Continuation preferred.",
         4: "Friday — Trend days common. Good for continuation trades.",
     }

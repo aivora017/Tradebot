@@ -11,14 +11,20 @@ from dataclasses import dataclass, field
 
 import config
 from logger_setup import get_logger
-from utils import vix_zone, next_expiry, time_between
+from utils import vix_zone, next_expiry, time_between, is_banknifty_expiry, is_nifty_expiry
 
 log = get_logger("Scanner")
 
-HEADERS = {
-    "Authorization": f"Bearer {config.UPSTOX_ACCESS_TOKEN}",
-    "Accept": "application/json",
-}
+def _get_headers() -> dict:
+    """
+    FIX (BUG-4): Always read fresh token from config.
+    Module-level HEADERS dict was set at import time and became stale after
+    morning_prep.py refreshed the token. Now reads current token every call.
+    """
+    return {
+        "Authorization": f"Bearer {config.UPSTOX_ACCESS_TOKEN}",
+        "Accept":        "application/json",
+    }
 
 # ── FII/DII feed (P2.3) ───────────────────────────────────────────
 NSE_FII_DII_URL = "https://www.nseindia.com/api/fiidiiTradeReact"
@@ -322,8 +328,8 @@ class MorningScanner:
 
         _, nifty_exp_str = next_expiry("NIFTY")
         _, bn_exp_str    = next_expiry("BANKNIFTY")
-        is_n_exp  = today.weekday() == config.NIFTY_EXPIRY_WEEKDAY
-        is_bn_exp = today.weekday() == config.BANKNIFTY_EXPIRY_WEEKDAY
+        is_n_exp  = is_nifty_expiry()     # weekly Tuesday (any Tuesday = Nifty expiry)
+        is_bn_exp = is_banknifty_expiry() # LAST Tuesday of month only
 
         market_type, bias, strategy, notes = self._determine_market_type(
             pcr_n, pcr_bn, is_n_exp, is_bn_exp
@@ -423,13 +429,11 @@ class MorningScanner:
 
     def _get_pcr_maxpain(self, symbol: str):
         try:
-            _, expiry_str = next_expiry(symbol)
-            exp_iso = datetime.strptime(expiry_str, "%d %b").replace(
-                year=datetime.now().year).strftime("%Y-%m-%d")
+            exp_iso, _ = next_expiry(symbol)   # first elem is already YYYY-MM-DD ISO string
             key = config.NIFTY_INDEX_KEY if symbol == "NIFTY" else config.BANKNIFTY_INDEX_KEY
             r   = requests.get(
                 f"{config.UPSTOX_BASE_URL}/option/chain",
-                headers=HEADERS,
+                headers=_get_headers(),
                 params={"instrument_key": key, "expiry_date": exp_iso},
                 timeout=10
             )

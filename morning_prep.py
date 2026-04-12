@@ -144,16 +144,39 @@ def fetch_ohlc(instrument_key: str, interval: str = "day", days: int = 10) -> li
         p(f"  OHLC fetch error: {e}", Y)
     return []
 
+def _last_tuesday_of_month(year: int, month: int) -> datetime:
+    """Last Tuesday of given month (for BankNifty monthly expiry)."""
+    import calendar
+    last_day = calendar.monthrange(year, month)[1]
+    d = last_day
+    while datetime(year, month, d).weekday() != 1:  # 1 = Tuesday
+        d -= 1
+    return datetime(year, month, d)
+
+
 def fetch_option_chain(symbol: str) -> dict:
     """Fetch option chain → returns {pcr, max_pain, resistance_levels, support_levels}"""
     try:
-        # Determine expiry
+        # FIX (BUG-8): Correct expiry logic per SEBI 2024 + NSE Sep 2025 changes
+        # NIFTY:     weekly Tuesday
+        # BANKNIFTY: monthly last Tuesday (NOT every Wednesday)
         today = datetime.now()
-        exp_wd = 2 if "BANK" in symbol else 1  # BN=Wed, Nifty=Tue
-        days_ahead = (exp_wd - today.weekday()) % 7
-        if days_ahead == 0 and today.hour >= 15:
-            days_ahead = 7
-        expiry_dt  = today + timedelta(days=days_ahead)
+        if "BANK" in symbol.upper():
+            # BN: monthly last Tuesday
+            last_tue = _last_tuesday_of_month(today.year, today.month)
+            cutoff = today.replace(hour=15, minute=30, second=0, microsecond=0)
+            if last_tue.date() < today.date() or (last_tue.date() == today.date() and today >= cutoff):
+                next_month = today.month + 1
+                next_year  = today.year + (1 if next_month > 12 else 0)
+                next_month = next_month if next_month <= 12 else 1
+                last_tue = _last_tuesday_of_month(next_year, next_month)
+            expiry_dt = last_tue
+        else:
+            # NIFTY: next weekly Tuesday
+            days_ahead = (1 - today.weekday()) % 7  # 1 = Tuesday
+            if days_ahead == 0 and today.hour >= 15:
+                days_ahead = 7
+            expiry_dt = today + timedelta(days=days_ahead)
         expiry_iso = expiry_dt.strftime("%Y-%m-%d")
 
         key = ("NSE_INDEX|Nifty Bank" if "BANK" in symbol
@@ -280,6 +303,95 @@ def detect_trend(candles: list) -> str:
 def fetch_vix_ltp() -> float:
     return fetch_ltp("NSE_INDEX|India VIX")
 
+# ── Step 1.5: Fetch Live Account Balance ──────────────────────────
+
+def fetch_live_funds() -> float:
+    """
+    Fetches actual available margin from Upstox and updates TRADING_CAPITAL
+    + MONTHLY_START_CAPITAL in .env so the bot starts with the real balance.
+
+    Upstox /v2/user/funds-and-margin response structure:
+      data.equity.available_margin  — cash free for new trades (use this)
+      data.equity.used_margin       — margin already locked in open positions
+      data.equity.payin_amount      — cash added today (payin)
+      data.equity.notional_cash     — ledger balance before live P&L
+    NO 'net' field exists — don't use it.
+
+    Returns the available capital (float). Falls back to existing .env value on error.
+    """
+    banner("STEP 1.5 — Fetching Live Account Balance")
+    fallback = float(os.getenv("TRADING_CAPITAL", "50000"))
+    try:
+        # Call WITHOUT segment param — most reliable, returns full equity+commodity block
+        r = requests.get(
+            f"{BASE_URL}/user/get-funds-and-margin",
+            headers=get_headers(),
+            timeout=10,
+        )
+        raw = r.text[:500]
+
+        if r.status_code != 200:
+            p(f"❌  Funds fetch HTTP {r.status_code}", R)
+            p(f"    Raw response: {raw}", Y)
+            p("    Using existing TRADING_CAPITAL from .env", Y)
+            return fallback
+
+        resp = r.json()
+        if resp.get("status") != "success":
+            p(f"❌  API returned non-success: {raw}", R)
+            p("    Using existing TRADING_CAPITAL from .env", Y)
+            return fallback
+
+        data = resp.get("data", {})
+
+        # Handle two possible structures Upstox may return:
+        #  1. data = {"equity": {...}, "commodity": {...}}  ← standard
+        #  2. data = {"available_margin": ..., ...}        ← when segment param used
+        if "equity" in data:
+            equity = data["equity"]
+        else:
+            # Flat structure — treat the whole data dict as equity
+            equity = data
+
+        available = float(equity.get("available_margin", 0) or 0)
+        used       = float(equity.get("used_margin",       0) or 0)
+        payin      = float(equity.get("payin_amount",      0) or 0)
+        notional   = float(equity.get("notional_cash",     0) or 0)
+
+        p(f"  ✅ Available Margin (free for new trades): ₹{available:>12,.2f}", G)
+        p(f"  ℹ️  Used Margin (locked in positions):      ₹{used:>12,.2f}", B)
+        p(f"  ℹ️  Payin today:                            ₹{payin:>12,.2f}", B)
+        p(f"  ℹ️  Notional cash (ledger):                 ₹{notional:>12,.2f}", B)
+
+        # Capital for new trades = available_margin only
+        # Never add used_margin — that's already deployed
+        capital = available
+
+        if capital <= 0:
+            # Could be after-hours (0 available) — use notional as fallback
+            if notional > 0:
+                capital = notional
+                p(f"\n  ⚠️  available_margin=0, using notional_cash: ₹{capital:,.2f}", Y)
+            else:
+                p(f"\n  ⚠️  All funds values are 0. Raw data dump:", Y)
+                p(f"    {json.dumps(data, indent=2)[:400]}", Y)
+                p("    Using existing TRADING_CAPITAL from .env", Y)
+                return fallback
+
+        set_key(ENV_FILE, "TRADING_CAPITAL",     str(round(capital, 2)))
+        set_key(ENV_FILE, "MONTHLY_START_CAPITAL", str(round(capital, 2)))
+        load_dotenv(override=True)
+
+        p(f"\n  💰 TRADING_CAPITAL     → ₹{capital:,.2f}", G)
+        p(f"  💰 MONTHLY_START_CAPITAL → ₹{capital:,.2f}", G)
+        return capital
+
+    except Exception as e:
+        p(f"❌  Exception in fetch_live_funds: {e}", R)
+        p("    Using existing TRADING_CAPITAL from .env", Y)
+        return fallback
+
+
 # ── Step 2: Fetch all market data ─────────────────────────────────
 
 def fetch_market_data():
@@ -353,6 +465,35 @@ def fetch_market_data():
         "bn_candles":   bn_candles,
     }
 
+# ── Block replacer (brace-counting — regex \{.*?\} is non-greedy and
+#    stops at the first inner } instead of the outer one, corrupting config) ──
+
+def _replace_block(content: str, start_marker: str, new_block: str) -> str:
+    """Replace a Python assignment block using brace counting, not regex."""
+    idx = content.find(start_marker)
+    if idx == -1:
+        return content          # marker not found — leave unchanged
+
+    brace_start = content.find('{', idx)
+    if brace_start == -1:
+        return content
+
+    depth, pos, brace_end = 0, brace_start, brace_start
+    while pos < len(content):
+        if content[pos] == '{':
+            depth += 1
+        elif content[pos] == '}':
+            depth -= 1
+            if depth == 0:
+                brace_end = pos
+                break
+        pos += 1
+    else:
+        return content          # unmatched braces — leave unchanged
+
+    return content[:idx] + new_block + content[brace_end + 1:]
+
+
 # ── Step 3: Update config.py ──────────────────────────────────────
 
 def update_config(data: dict):
@@ -384,12 +525,11 @@ def update_config(data: dict):
         f'}}'
     )
 
-    # Replace KEY_LEVELS block
-    content = re.sub(
-        r'KEY_LEVELS: Dict\[str, Dict\[str, List\[float\]\]\] = \{.*?\}',
-        new_levels,
+    # Replace KEY_LEVELS block (brace-counting — safe for nested dicts)
+    content = _replace_block(
         content,
-        flags=re.DOTALL,
+        'KEY_LEVELS: Dict[str, Dict[str, List[float]]] = ',
+        new_levels,
     )
 
     # ── Update MARKET_CONTEXT ────────────────────────────────────
@@ -439,12 +579,7 @@ def update_config(data: dict):
         f'}}'
     )
 
-    content = re.sub(
-        r'MARKET_CONTEXT = \{.*?\}',
-        new_context,
-        content,
-        flags=re.DOTALL,
-    )
+    content = _replace_block(content, 'MARKET_CONTEXT = ', new_context)
 
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         f.write(content)
@@ -504,7 +639,7 @@ def print_war_plan(data: dict):
     edges = {
         0: "Monday — watch for gap fade or continuation. Gap and Go if GIFT aligned.",
         1: "Tuesday — Nifty expiry day. Gamma scalp bonus at 9:15-9:35, then ALL strategies run normally until 14:00.",
-        2: "Wednesday — BN expiry day. Gamma scalp bonus at 9:15-9:35, then ALL strategies run normally until 14:00. Historically high trending day.",
+        2: "Wednesday — High trending day historically. ORB + EMA preferred. (BN expiry = monthly last Tuesday, NOT Wednesday.)",
         3: "Thursday — High trending day historically. ORB + Trend Continuation preferred.",
         4: "Friday — Trend days common. Good for continuation trades.",
     }
@@ -512,6 +647,76 @@ def print_war_plan(data: dict):
     print()
     print(f"  {BD}{G}Ready. Run: python main.py{W}")
     print()
+
+# ── Step 5: Telegram Chat ID Auto-Fix ────────────────────────────
+
+def fix_telegram_chat_id():
+    banner("STEP 5 — Telegram Notification Check")
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if not bot_token:
+        p("⚠  TELEGRAM_BOT_TOKEN not in .env — skipping", Y)
+        return
+
+    # Fetch recent updates to find the correct chat_id
+    try:
+        r = requests.get(
+            f"https://api.telegram.org/bot{bot_token}/getUpdates",
+            params={"limit": 20, "allowed_updates": ["message"]},
+            timeout=8,
+        )
+    except Exception as e:
+        p(f"⚠  Telegram getUpdates error: {e}", Y)
+        return
+
+    if r.status_code != 200:
+        p(f"⚠  Telegram API error {r.status_code} — check BOT_TOKEN", Y)
+        return
+
+    results = r.json().get("result", [])
+    if not results:
+        p("⚠  No Telegram messages found.", Y)
+        p("   → Open Telegram, find your bot, send /start", Y)
+        p("   → Then re-run morning_prep.py to auto-save the chat_id", Y)
+        return
+
+    # Use the most recent message's chat_id
+    chat_id = None
+    for update in reversed(results):
+        msg = update.get("message", {})
+        if msg:
+            chat_id = msg.get("chat", {}).get("id")
+            break
+
+    if not chat_id:
+        p("⚠  Could not extract chat_id from updates", Y)
+        return
+
+    current = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if str(chat_id) == str(current):
+        p(f"✅ TELEGRAM_CHAT_ID already correct: {chat_id}", G)
+    else:
+        set_key(ENV_FILE, "TELEGRAM_CHAT_ID", str(chat_id))
+        load_dotenv(override=True)
+        p(f"✅ TELEGRAM_CHAT_ID fixed: {current or 'MISSING'} → {chat_id}", G)
+
+    # Send a test message to confirm connectivity
+    try:
+        test = requests.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={
+                "chat_id":    chat_id,
+                "text":       "✅ WAR ROOM connected. Morning prep complete — bot starting shortly.",
+                "parse_mode": "HTML",
+            },
+            timeout=8,
+        )
+        if test.status_code == 200:
+            p("✅ Test Telegram message sent ✓", G)
+        else:
+            p(f"⚠  Test message failed: {test.status_code} {test.text[:100]}", Y)
+    except Exception as e:
+        p(f"⚠  Test message error: {e}", Y)
+
 
 # ── Main ─────────────────────────────────────────────────────────
 
@@ -526,6 +731,9 @@ def main():
     # Token refresh
     refresh_token()
 
+    # Fetch live account balance → update .env TRADING_CAPITAL
+    fetch_live_funds()
+
     # Fetch market data
     data = fetch_market_data()
 
@@ -534,6 +742,9 @@ def main():
 
     # Print war plan
     print_war_plan(data)
+
+    # Auto-fix Telegram chat_id + send connectivity test
+    fix_telegram_chat_id()
 
 
 if __name__ == "__main__":

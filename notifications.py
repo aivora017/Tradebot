@@ -152,4 +152,11 @@ class Notifier:
         )
 
     def test(self):
-        self.send("🤖 <b>WAR ROOM BOT STARTED</b>\nAll systems online. PAPER mode. Watching markets.")
+        mode  = config.EXECUTION_MODE
+        emoji = "⚠️ LIVE MONEY ACTIVE" if mode == "LIVE" else f"{mode} mode"
+        self.send(
+            f"🤖 <b>WAR ROOM BOT STARTED</b>\n"
+            f"Mode: <b>{emoji}</b>\n"
+            f"Capital: ₹{config.TOTAL_CAPITAL:,.0f}\n"
+            f"All systems online. Watching markets."
+        )

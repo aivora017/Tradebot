@@ -105,17 +105,33 @@ class RiskManager:
                       symbol: str, strength: str = "MODERATE") -> Tuple[float, int]:
         """
         Strength-based capital deployment × VIX multiplier.
-        strength: "GODMODE" | "STRONG" | "MODERATE" | "WEAK"
-          → maps to STRENGTH_CAPITAL_PCT: 50% / 35% / 25% / 15% of available capital.
-        VIX multiplier then scales the allocation (IDEAL=1.0, ELEVATED=0.9, EXTREME=0.6).
-        Lots = floor(allocated_capital / cost_per_lot), floor at MIN_LOTS_PER_TRADE.
-        No upper cap on lots — capital is deployed fully.
+        Uses AVAILABLE capital (total - locked in open trades) so sizing
+        naturally adapts as positions accumulate.
+
+        strength → STRENGTH_CAPITAL_PCT:
+          GODMODE=60% / STRONG=45% / MODERATE=35% / WEAK=20% of available.
+        VIX multiplier scales allocation (IDEAL=1.0, ELEVATED=0.9, EXTREME=0.6).
+        Lots = floor(allocated / cost_per_lot), floored at MIN_LOTS_PER_TRADE.
         """
         from utils import vix_size_multiplier, lot_size, lots_to_buy, capital_at_risk
-        base_cap = capital_at_risk(symbol, tier, strength)
-        cap      = base_cap * vix_size_multiplier(vix)
-        lots     = lots_to_buy(cap, premium, symbol) if premium > 0 else config.MIN_LOTS_PER_TRADE
-        lots     = max(lots, config.MIN_LOTS_PER_TRADE)   # enforce minimum 2 lots always
-        log.info(f"Position size [{strength}]: cap=₹{cap:.0f} | lots={lots} | "
-                 f"premium=₹{premium:.0f} | VIX={vix:.1f}")
+
+        # Available = total minus capital locked in currently open trades
+        locked    = sum(t.capital_locked for t in self.tracker.get_open_trades())
+        available = max(config.TOTAL_CAPITAL - locked, 0)
+
+        base_cap  = capital_at_risk(symbol, tier, strength, available_capital=available)
+        cap       = base_cap * vix_size_multiplier(vix)
+        ls        = lot_size(symbol)
+        lots      = lots_to_buy(cap, premium, symbol) if premium > 0 else config.MIN_LOTS_PER_TRADE
+        lots      = max(lots, config.MIN_LOTS_PER_TRADE)
+
+        pct_used  = config.STRENGTH_CAPITAL_PCT.get(strength.upper(), 0.35)
+        raw_lots  = int(cap / (premium * ls)) if (premium > 0 and ls > 0) else 0
+        log.info(
+            f"💰 Sizing [{strength}] | "
+            f"total=₹{config.TOTAL_CAPITAL:,.0f} locked=₹{locked:,.0f} avail=₹{available:,.0f} | "
+            f"alloc={pct_used*100:.0f}%→₹{cap:,.0f} | "
+            f"₹{premium:.0f}×{ls}sh=₹{premium*ls:,.0f}/lot | "
+            f"raw={raw_lots}→final={lots} lots"
+        )
         return cap, lots

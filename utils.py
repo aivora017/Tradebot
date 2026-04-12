@@ -130,14 +130,17 @@ def normalize_symbol(raw: str) -> Optional[str]:
         return "NIFTY"
     return None
 
-def capital_at_risk(symbol: str, tier: int, strength: str = "MODERATE") -> float:
+def capital_at_risk(symbol: str, tier: int, strength: str = "MODERATE",
+                    available_capital: float = None) -> float:
     """
-    Strength-based capital deployment. No fixed % ceiling.
-    Uses available capital × strength multiplier — lets capital compound naturally.
+    Strength-based capital deployment using AVAILABLE capital (total - locked).
+    Pass available_capital from the risk manager so sizing adapts as trades accumulate.
+    Falls back to config.TOTAL_CAPITAL if not provided.
     """
-    pct = config.STRENGTH_CAPITAL_PCT.get(strength.upper(),
-          config.STRENGTH_CAPITAL_PCT["MODERATE"])
-    return config.TOTAL_CAPITAL * pct
+    base = available_capital if available_capital is not None else config.TOTAL_CAPITAL
+    pct  = config.STRENGTH_CAPITAL_PCT.get(strength.upper(),
+           config.STRENGTH_CAPITAL_PCT["MODERATE"])
+    return base * pct
 
 def lots_to_buy(capital: float, premium: float, symbol: str) -> int:
     """
@@ -164,8 +167,13 @@ _CAPITAL_FILE = _os.path.join(
 def load_compounded_capital() -> float:
     """
     Load yesterday's closing capital for daily compounding.
-    Returns TOTAL_CAPITAL from .env if no saved capital exists.
+    In LIVE mode: always returns config.TOTAL_CAPITAL (Upstox balance is authoritative —
+    morning_prep.py already fetched and wrote the real balance to .env).
+    In PAPER mode: reads daily_capital.json for intra-session compounding.
     """
+    if getattr(config, "EXECUTION_MODE", "PAPER") == "LIVE":
+        # LIVE mode — trust the .env balance fetched from Upstox, never override it
+        return config.TOTAL_CAPITAL
     try:
         if _os.path.exists(_CAPITAL_FILE):
             with open(_CAPITAL_FILE) as f:

@@ -456,6 +456,8 @@ class StrategyEngine:
         if len(c5) < 5 or len(c15) < 3:
             return None
         v   = vwap_from_candles(c5)
+        if v <= 0:
+            return None   # no candle volume data yet (REST-only mode)
         td  = trend_direction([c.close for c in c15[-5:]])
         vm  = volume_mult(c5, 15)
         cur = c5[-1]

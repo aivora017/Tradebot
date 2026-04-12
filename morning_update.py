@@ -48,6 +48,35 @@ def bold(s):   return f"\033[1m{s}\033[0m"
 def cyan(s):   return f"\033[96m{s}\033[0m"
 
 
+# ── Block replacer (brace-counting — regex \{.*?\} is non-greedy and
+#    stops at the first inner } instead of the outer one, corrupting config) ──
+
+def _replace_block(content: str, start_marker: str, new_block: str) -> str:
+    """Replace a Python assignment block using brace counting, not regex."""
+    idx = content.find(start_marker)
+    if idx == -1:
+        return content          # marker not found — leave unchanged
+
+    brace_start = content.find('{', idx)
+    if brace_start == -1:
+        return content
+
+    depth, pos, brace_end = 0, brace_start, brace_start
+    while pos < len(content):
+        if content[pos] == '{':
+            depth += 1
+        elif content[pos] == '}':
+            depth -= 1
+            if depth == 0:
+                brace_end = pos
+                break
+        pos += 1
+    else:
+        return content          # unmatched braces — leave unchanged
+
+    return content[:idx] + new_block + content[brace_end + 1:]
+
+
 # ── STEP 1: Token Refresh ─────────────────────────────────────────
 
 def refresh_token():
@@ -467,11 +496,10 @@ def update_config(bn: dict, n50: dict, vix: float):
     }},
 }}'''
 
-    content = re.sub(
-        r'KEY_LEVELS: Dict\[str, Dict\[str, List\[float\]\]\] = \{.*?\}',
-        new_levels,
+    content = _replace_block(
         content,
-        flags=re.DOTALL
+        'KEY_LEVELS: Dict[str, Dict[str, List[float]]] = ',
+        new_levels,
     )
 
     # ── MARKET_CONTEXT ────────────────────────────────────────────
@@ -493,12 +521,7 @@ def update_config(bn: dict, n50: dict, vix: float):
     "vix_trend":         "{vix_trend}",
 }}'''
 
-    content = re.sub(
-        r'MARKET_CONTEXT = \{.*?\}',
-        new_context,
-        content,
-        flags=re.DOTALL
-    )
+    content = _replace_block(content, 'MARKET_CONTEXT = ', new_context)
 
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         f.write(content)

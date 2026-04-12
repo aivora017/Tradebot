@@ -23,6 +23,8 @@ load_dotenv()
 
 TOKEN    = os.getenv("UPSTOX_ACCESS_TOKEN", "")
 BASE_URL = "https://api.upstox.com/v2"
+# NOTE: HEADERS is re-built inside run() using the latest token from os.getenv,
+# so it's never stale even when this module is imported after a token refresh.
 HEADERS  = {"Authorization": f"Bearer {TOKEN}", "Accept": "application/json"}
 
 TG_BOT   = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -328,6 +330,11 @@ def patch_config(key_levels: dict, market_context: dict, vix: float, pcr_bn: flo
 # ── Main ──────────────────────────────────────────────────────────
 
 def run() -> dict:
+    global HEADERS, TOKEN
+    # Always rebuild HEADERS from the current env so token is never stale
+    TOKEN   = os.getenv("UPSTOX_ACCESS_TOKEN", TOKEN)
+    HEADERS = {"Authorization": f"Bearer {TOKEN}", "Accept": "application/json"}
+
     print("\n" + "="*60)
     print("  🔧 MORNING AUTO-SETUP — WAR ROOM")
     print("="*60)

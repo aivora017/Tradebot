@@ -160,6 +160,9 @@ function App(){
       if(!r.ok)throw new Error(`HTTP ${r.status}`);
       const d=await r.json();
       setSnap(d);snapRef.current=d;setBridgeOk(true);setSyncTs(ts());setSyncErr('');
+      // FIX: update capital state from live snapshot — overrides hardcoded useState(50000)
+      if(d.capital&&d.capital>0){setCapital(d.capital);capRef.current=d.capital;save('cap',d.capital);}
+      if(d.monthly_start_capital&&d.monthly_start_capital>0){save('msc',d.monthly_start_capital);}
     }catch(e){setBridgeOk(false);setSyncErr(e.message);}
   },[bridgeUrl]);
 
@@ -180,11 +183,12 @@ function App(){
   const callClaude=useCallback(async()=>{
     if(aiLoad)return;setAiLoad(true);
     const s=snapRef.current;
-    const packet={...(s||{}),capital_current:Math.round(capRef.current),capital_start:50000,
+    const msc=await load('msc')||capRef.current;
+    const packet={...(s||{}),capital_current:Math.round(capRef.current),capital_start:Math.round(msc),
       recent_closed:closedRef.current.slice(0,5).map(t=>({instrument:t.instrument,strategy:t.strategy,pnl_pct:fmt(t.pnl_pct,1),exit_reason:t.exit_reason}))};
     try{
       const res=await fetch(`${bridgeUrl.replace(/\/$/,'')}/api/claude`,{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:800,system:SYS,
+        body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1500,system:SYS,
           messages:[{role:'user',content:`Live data:\n${JSON.stringify(packet,null,2)}\n\nDecision:`}]})});
       const d=await res.json();
       let raw=d.content?.filter(x=>x.type==='text').map(x=>x.text).join('')||'';
@@ -202,7 +206,7 @@ function App(){
     const w=ct.filter(t=>t.pnl_rs>0).length;
     try{
       const res=await fetch(`${bridgeUrl.replace(/\/$/,'')}/api/claude`,{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:800,system:LEARN_SYS,
+        body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1500,system:LEARN_SYS,
           messages:[{role:'user',content:JSON.stringify({total:ct.length,wins:w,wr:fmt(w/ct.length*100,1),net_pnl:ct.reduce((s,t)=>s+(t.pnl_rs||0),0),trades:ct.slice(0,20)})}]})}); 
       const d=await res.json();
       let raw=d.content?.filter(x=>x.type==='text').map(x=>x.text).join('')||'';
@@ -231,7 +235,8 @@ function App(){
   const stats=snap?.daily_stats||{};const dec=snap?.claude_last||lastDec;
   const openTrades=snap?.open_trades||[];const signals=(snap?.signals||[]).slice(0,8);
   const chain=snap?.atm_chain||[];const orb=snap?.orb||{};
-  const growth=((capital-50000)/50000)*100;
+  const mscVal=snap?.monthly_start_capital||capital||50000;
+  const growth=mscVal>0?((capital-mscVal)/mscVal)*100:0;
   const totalPnl=closed.reduce((s,t)=>s+(t.pnl_rs||0),0);
   const wins=closed.filter(t=>t.pnl_rs>0).length;
   const wr=closed.length?wins/closed.length*100:0;
@@ -384,7 +389,7 @@ function App(){
       {tab==='dashboard'&&(
         <div>
           <div className="g4" style={{marginBottom:6}}>
-            <div className="m"><div className="ml">CAPITAL</div><div className="mv" style={{color:'#f59e0b'}}>{fmtRs(capital)}</div><div className="ms">Start ₹50K</div></div>
+            <div className="m"><div className="ml">CAPITAL</div><div className="mv" style={{color:'#f59e0b'}}>{fmtRs(capital)}</div><div className="ms">Start {fmtRs(mscVal)}</div></div>
             <div className="m"><div className="ml">TOTAL GROWTH</div><div className={`mv ${col(growth)}`}>{fmtP(growth)}</div><div className="ms">{fmtRs(totalPnl)} net</div></div>
             <div className="m"><div className="ml">BOT P&L TODAY</div><div className={`mv ${col(stats.daily_pnl_rs)}`}>{fmtRs(stats.daily_pnl_rs||0)}</div><div className="ms">{stats.daily_count||0}/{snap?.daily_stats?.total_trades===undefined?3:3} trades</div></div>
             <div className="m"><div className="ml">WIN RATE</div><div className="mv" style={{color:'#60a5fa'}}>{fmt(wr,0)}%</div><div className="ms">{wins}W/{closed.length-wins}L</div></div>

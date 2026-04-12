@@ -102,6 +102,11 @@ class OptionRow:
     pe_gamma:  float = 0.0
     pe_theta:  float = 0.0
     pe_vega:   float = 0.0
+    # ── Actual Upstox instrument_key from option chain (REQUIRED for live orders) ──
+    # Format: "NSE_FO|NIFTY2408APR22500CE" — extracted directly from chain response
+    # Use this as instrument_token in order payload. Never construct manually.
+    ce_instrument_key: str = ""
+    pe_instrument_key: str = ""
 
 
 class CandleBuilder:
@@ -192,9 +197,18 @@ class MarketDataFeed:
         self.c5m  = CandleBuilder(300)
         self.c15m = CandleBuilder(900)
 
-        self._headers = {
+    # ── Auth Headers — always fresh token ────────────────────────
+
+    def _get_headers(self) -> dict:
+        """
+        Always build headers from the CURRENT token in config.
+        morning_prep.py refreshes the token every morning and updates config +.env.
+        Using this instead of a cached self._headers ensures the feed never
+        gets 401 after a token refresh mid-day.
+        """
+        return {
             "Authorization": f"Bearer {config.UPSTOX_ACCESS_TOKEN}",
-            "Accept": "application/json",
+            "Accept":        "application/json",
         }
 
     # ── Public API ────────────────────────────────────────────────
@@ -331,6 +345,50 @@ class MarketDataFeed:
     def is_connected(self) -> bool:
         return self._connected
 
+    def get_instrument_key_for_strike(self, symbol: str, strike: float,
+                                       option_type: str) -> str:
+        """
+        Returns the actual Upstox instrument_key for a given strike/option_type.
+        Source: option chain response (call_options.instrument_key /
+                put_options.instrument_key) — never constructed manually.
+
+        Args:
+            symbol:      "NIFTY" | "BANKNIFTY"
+            strike:      strike price (float)
+            option_type: "CE" | "PE" | "CE+PE" (straddle uses CE key)
+
+        Returns:
+            Upstox instrument_key string (e.g. "NSE_FO|NIFTY2408APR22500CE")
+            or "" if not found in current chain snapshot.
+        """
+        with self._lock:
+            rows = self._chain.get(symbol, [])
+        for row in rows:
+            if row.strike == float(strike):
+                if "PE" in option_type and "CE" not in option_type:
+                    return row.pe_instrument_key
+                return row.ce_instrument_key  # CE or CE+PE (straddle)
+        log.warning(f"instrument_key not found: {symbol} {strike} {option_type} "
+                    f"(chain has {len(rows)} rows)")
+        return ""
+
+    def get_option_ltp(self, symbol: str, strike: float, option_type: str) -> float:
+        """
+        Returns current option LTP from chain snapshot for a given strike/type.
+        Used by main.py to update open trade premiums with real data.
+        Returns 0.0 if chain not available or strike not found.
+        """
+        with self._lock:
+            rows = self._chain.get(symbol, [])
+        for row in rows:
+            if row.strike == float(strike):
+                if option_type == "CE+PE":
+                    return (row.ce_ltp or 0) + (row.pe_ltp or 0)
+                if "PE" in option_type:
+                    return row.pe_ltp or 0.0
+                return row.ce_ltp or 0.0
+        return 0.0
+
     def subscribe_strikes(self, keys: List[str]):
         """Subscribe to additional option strike keys via WS."""
         if self._ws and self._connected:
@@ -347,7 +405,7 @@ class MarketDataFeed:
         try:
             r = requests.get(
                 f"{config.UPSTOX_BASE_URL_V3}/feed/market-data-feed/authorize",
-                headers=self._headers,
+                headers=self._get_headers(),
                 timeout=10
             )
             if r.status_code == 200:
@@ -656,7 +714,7 @@ class MarketDataFeed:
                 # Fetch full market quotes — includes OHLC and prev_close
                 r = requests.get(
                     f"{config.UPSTOX_BASE_URL}/market-quote/quotes",
-                    headers=self._headers,
+                    headers=self._get_headers(),
                     params={"instrument_key": all_keys},
                     timeout=6
                 )
@@ -742,7 +800,7 @@ class MarketDataFeed:
         try:
             r = requests.get(
                 f"{config.UPSTOX_BASE_URL}/option/contract",
-                headers=self._headers,
+                headers=self._get_headers(),
                 params={"instrument_key": instrument_key},
                 timeout=8
             )
@@ -784,7 +842,7 @@ class MarketDataFeed:
             log.debug(f"Fetching chain {symbol} expiry={expiry_iso} key={key}")
             r = requests.get(
                 f"{config.UPSTOX_BASE_URL}/option/chain",
-                headers=self._headers,
+                headers=self._get_headers(),
                 params={"instrument_key": key, "expiry_date": expiry_iso},
                 timeout=10
             )
@@ -805,6 +863,11 @@ class MarketDataFeed:
                 pe         = pe_data.get("market_data", {})
                 ce_greeks  = ce_data.get("option_greeks", {})
                 pe_greeks  = pe_data.get("option_greeks", {})
+                # ── BUG-3 FIX: Extract actual instrument_key from chain response ──
+                # These are the ONLY valid keys for live order placement.
+                # Format: "NSE_FO|NIFTY2408APR22500CE" — never construct this manually.
+                ce_ikey = ce_data.get("instrument_key", "")
+                pe_ikey = pe_data.get("instrument_key", "")
                 ce_oi = int(ce.get("oi") or 0)
                 pe_oi = int(pe.get("oi") or 0)
                 total_ce_oi += ce_oi
@@ -834,6 +897,9 @@ class MarketDataFeed:
                     pe_gamma  = float(pe_greeks.get("gamma")  or 0),
                     pe_theta  = float(pe_greeks.get("theta")  or 0),
                     pe_vega   = float(pe_greeks.get("vega")   or 0),
+                    # ── Actual instrument keys for live orders ────────────
+                    ce_instrument_key = ce_ikey,
+                    pe_instrument_key = pe_ikey,
                 ))
 
             if not rows:

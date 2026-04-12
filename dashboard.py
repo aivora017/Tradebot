@@ -285,10 +285,9 @@ class Dashboard:
         hm  = now.hour * 60 + now.minute
 
         if hm < 9*60+20:     zone = "[yellow]PRE-MARKET — OBSERVE ONLY[/]"
-        elif hm <= 11*60:    zone = "[bold green]✅ PRIMARY ENTRY WINDOW[/]"
-        elif hm <= 11*60+30: zone = "[yellow]LATE PRIMARY — SELECTIVE[/]"
-        elif hm <= 13*60+30: zone = "[bold red]🔴 DEAD ZONE — NO ENTRIES[/]"
-        elif hm <= 14*60:    zone = "[yellow]SECONDARY WINDOW[/]"
+        elif hm < 13*60:     zone = "[bold green]✅ PRIMARY ENTRY WINDOW[/]"
+        elif hm < 13*60+15:  zone = "[bold red]🔴 DEAD ZONE 13:00–13:15[/]"
+        elif hm < 15*60:     zone = "[yellow]SECONDARY WINDOW[/]"
         else:                zone = "[bold red]⏰ EXIT ONLY — CLOSE ALL[/]"
 
         expiry_note = ""

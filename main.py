@@ -183,6 +183,17 @@ class WARRoom:
             log.error(f"Tick handler error: {e}")
 
     def _update_trade_premiums(self, tick: Tick):
+        """
+        FIX (BUG-6): Use REAL option LTP from chain data for ALL SL/T1/T2 decisions.
+
+        Previous version used a delta × index_move approximation which was inaccurate
+        and caused wrong SL triggers / missed T1/T2 exits in live mode.
+
+        Priority order:
+          1. Real LTP from option chain snapshot (chain_ltp) — updated every ~30s
+          2. Real LTP via REST fallback if chain is stale (> 60s old)
+          3. Delta approximation ONLY if no chain data at all (pre-market)
+        """
         from utils import normalize_symbol
         sym = normalize_symbol(tick.symbol)
         if not sym:
@@ -190,15 +201,21 @@ class WARRoom:
         for trade in self.tracker.get_open_trades():
             if trade.symbol != sym:
                 continue
+
+            # ── Try real LTP from chain snapshot first ──────────────────
+            real_ltp = self.feed.get_option_ltp(sym, trade.strike, trade.option_type)
+            if real_ltp > 0:
+                self.tracker.update_premium(trade.id, real_ltp)
+                log.debug(f"Premium [{trade.id}] {sym} {trade.strike}{trade.option_type}: "
+                          f"real={real_ltp:.1f}")
+                continue
+
+            # ── Fallback: delta approximation (pre-market / chain not loaded) ──
             idx_move = tick.ltp - trade.entry_index
             delta    = 0.5
             otype    = trade.option_type
             if otype == "CE+PE":
-                # Straddle gains on any large move (gamma); loses on time decay only
-                # Approximate: premium rises with abs move, small bleed on flat market
-                move_gain = delta * abs(idx_move) * 0.5
-                time_decay = 0.0   # tracked by SL%, not here
-                approx_prem = max(1.0, trade.entry_premium + move_gain - time_decay)
+                approx_prem = max(1.0, trade.entry_premium + delta * abs(idx_move) * 0.5)
             else:
                 directional = (
                     1 if (otype == "CE" and idx_move > 0) or (otype == "PE" and idx_move < 0)
@@ -206,6 +223,8 @@ class WARRoom:
                 )
                 approx_prem = max(1.0, trade.entry_premium + delta * abs(idx_move) * directional)
             self.tracker.update_premium(trade.id, approx_prem)
+            log.debug(f"Premium [{trade.id}] {sym} {trade.strike}{trade.option_type}: "
+                      f"approx={approx_prem:.1f} (chain not available)")
 
     # ── Claude Decision Handler ────────────────────────────────────
 
@@ -274,6 +293,8 @@ class WARRoom:
 
         chain   = self.feed.get_chain(symbol)
         premium = 0.0
+        # ── FIX (BUG-2): Get REAL instrument_key from chain — never construct it ──
+        real_instrument_key = self.feed.get_instrument_key_for_strike(symbol, strike, otype)
         for row in chain:
             if row.strike == strike:
                 if otype == "CE+PE":
@@ -287,6 +308,11 @@ class WARRoom:
             premium = 200.0
             log.warning(f"Using fallback premium ₹{premium}")
 
+        if config.EXECUTION_MODE == "LIVE" and not real_instrument_key:
+            log.warning(f"⚠️ instrument_key not in chain for {symbol} {strike} {otype} — "
+                        f"chain may not be loaded yet. Aborting trade.")
+            return
+
         cap, lots = self.risk.position_size(tier, vix, premium, symbol, strength)
 
         if config.EXECUTION_MODE in ("LIVE", "PAPER"):
@@ -294,7 +320,8 @@ class WARRoom:
             result = self.orders.buy_option(
                 symbol=symbol, strike=strike, option_type=otype,
                 expiry_str=expiry_str, lots=lots, order_type="MARKET",
-                limit_price=premium,   # pass real premium so paper fills at correct price
+                limit_price=premium,          # pass real premium so paper fills at correct price
+                instrument_key=real_instrument_key,  # FIX: from chain, not constructed
             )
             if result.success:
                 fill_price = result.price if result.price > 0 else premium
@@ -318,8 +345,7 @@ class WARRoom:
                     lots=lots, capital_locked=cap,
                     sl_pct=sl_p, sl_index=float(decision.get("sl_index_level", 0)),
                     t1_pct=t1, t2_pct=t2, exit_by=exit_by,
-                    instrument_key=self.orders.build_instrument_key(
-                        symbol, strike, otype, expiry_str),
+                    instrument_key=real_instrument_key,  # FIX: real key from chain
                     order_id=result.order_id,
                     notes=trade_notes,
                 )
@@ -401,7 +427,8 @@ class WARRoom:
                             trade.id, trade.symbol, trade.strike,
                             trade.option_type, trade.pnl_pct * 100
                         )
-                        log.info(f"T2 hit [{trade.id}] — trail stop activated.")
+                        log.info(f"🏆 T2 hit [{trade.id}] — closing remaining position at peak.")
+                        self._close_trade(trade, "T2_HIT")
 
                     elif atype == "TIME_EXIT":
                         self.notify.time_exit(
@@ -518,18 +545,21 @@ class WARRoom:
 # ── Entry Point ───────────────────────────────────────────────────
 
 def main():
-    banner = """
+    mode_label = config.EXECUTION_MODE
+    banner = f"""
 ╔══════════════════════════════════════════════════════════════╗
 ║     ⚡   WAR ROOM — NIFTY / BANKNIFTY OPTION BUYING BOT      ║
-║     PAPER MODE | Aggressive · Precise · Rule-Based          ║
+║     {mode_label} MODE | Aggressive · Precise · Rule-Based          ║
 ╚══════════════════════════════════════════════════════════════╝
 
-DAILY CHECKLIST:
-  ✅ python get_token.py  (fresh Upstox token — run before 9 AM)
-  ✅ .env file has ANTHROPIC_API_KEY set
-  ✅ KEY_LEVELS updated in config.py for today
-  ✅ EXECUTION_MODE=PAPER (default — do NOT change to LIVE yet)
-  ✅ ngrok http 5003  (run in separate terminal for browser dashboard)
+DAILY CHECKLIST (LIVE MODE):
+  ✅ python morning_prep.py   (token refresh + live balance fetch)
+  ✅ .env: EXECUTION_MODE=LIVE confirmed
+  ✅ .env: ANTHROPIC_API_KEY set
+  ✅ KEY_LEVELS auto-updated by morning_prep.py
+  ✅ TRADING_CAPITAL auto-set from Upstox funds-and-margin
+  ✅ ngrok http 5003  (optional — run in separate terminal for dashboard)
+  ⚠️  REAL MONEY IS DEPLOYED — ALL ORDERS ARE LIVE
 """
     print(banner)
 

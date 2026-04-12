@@ -1,52 +1,30 @@
-# ─── Python ───────────────────────────────────────────────
+# .gitignore for Tradebot project
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
-*.egg-info/
-dist/
-build/
-.eggs/
-
-# ─── Virtual Environment ──────────────────────────────────
-venv/
-.venv/
-env/
-
-# ─── Secrets & Credentials ───────────────────────────────
-.env
 *.env
-*.pem
-*.key
-*.p12
-*.pfx
+venv/
 
-# ─── Sensitive Project Docs (contain API keys / private intel) ──
-TRADING_INSTRUCTIONS.md
-market_intelligence_report.docx
-
-# ─── Private Trading Data ────────────────────────────────
-data/
+# Logs
 logs/
+*.log
 
-# ─── Database ─────────────────────────────────────────────
+# Data
 *.db
 *.sqlite3
-*.db-shm
-*.db-wal
+data/
 
-# ─── OS ───────────────────────────────────────────────────
+# Secrets and tokens
+*.env
+*secret*
+*token*
+*key*
+
+# OS
 .DS_Store
 Thumbs.db
-desktop.ini
 
-# ─── IDE ──────────────────────────────────────────────────
+# VS Code
 .vscode/
-.idea/
-*.swp
-*.swo
-
-# ─── Misc ─────────────────────────────────────────────────
-*.log
-*.tmp
-*.bak

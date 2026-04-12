@@ -10,7 +10,7 @@ echo ========================================================
 echo.
 
 :: ── Kill any existing instances ───────────────────────────
-echo [0/4] Killing any existing bot/ngrok instances...
+echo [0/5] Killing any existing bot/ngrok instances...
 taskkill /F /FI "WINDOWTITLE eq WAR ROOM BOT*" >nul 2>&1
 taskkill /F /FI "WINDOWTITLE eq NGROK TUNNEL*" >nul 2>&1
 taskkill /F /IM ngrok.exe >nul 2>&1
@@ -29,38 +29,49 @@ if errorlevel 1 (
     pause & exit /b
 )
 
-:: ── Step 1: Token + Morning Setup ─────────────────────────
+:: ── Step 1: Morning Prep ──────────────────────────────────
+::   token refresh + live capital + market data + Telegram fix
 echo.
-echo [1/4] Refreshing Upstox token + auto-setup...
+echo [1/5] Running morning_prep.py...
 echo       (Browser will open. Login and paste redirect URL.)
 echo.
-python get_token.py
+python morning_prep.py
 if errorlevel 1 (
-    echo [ERROR] Token refresh failed. Exiting.
+    echo [ERROR] morning_prep.py failed. Exiting.
     pause & exit /b
 )
 
-:: ── Step 2: Start main.py in new window ───────────────────
+:: ── Step 2: GIFT Nifty pre-market bias ────────────────────
+::   morning_update.py skips token (already valid) — fetches GIFT Nifty only
 echo.
-echo [2/4] Starting WAR ROOM bot...
+echo [2/5] Fetching GIFT Nifty pre-market bias (morning_update.py)...
+echo       (No browser login needed — token already refreshed above.)
+echo.
+python morning_update.py
+:: Non-fatal: bot starts even if GIFT Nifty fetch fails
+echo       Done (GIFT Nifty fetch complete or skipped gracefully).
+
+:: ── Step 3: Start main.py in new window ───────────────────
+echo.
+echo [3/5] Starting WAR ROOM bot...
 start "WAR ROOM BOT" cmd /k "cd /d "%~dp0" && call venv\Scripts\activate.bat && python main.py"
 
 :: Wait for Flask bridge to come up
 echo       Waiting for bot to initialize...
 timeout /t 6 /nobreak >nul
 
-:: ── Step 3: Start ngrok in new window ─────────────────────
+:: ── Step 4: Start ngrok in new window ─────────────────────
 echo.
-echo [3/4] Starting ngrok tunnel...
+echo [4/5] Starting ngrok tunnel...
 start "NGROK TUNNEL" cmd /k "ngrok http 5003"
 
 :: Wait for ngrok to get a URL
 echo       Waiting for ngrok to connect...
 timeout /t 5 /nobreak >nul
 
-:: ── Step 4: Get ngrok URL and open dashboard ──────────────
+:: ── Step 5: Get ngrok URL and open dashboard ──────────────
 echo.
-echo [4/4] Fetching ngrok URL and opening dashboard...
+echo [5/5] Fetching ngrok URL and opening dashboard...
 
 for /f "delims=" %%U in ('powershell -NoProfile -Command "try { $j=(Invoke-WebRequest http://127.0.0.1:4040/api/tunnels -UseBasicParsing).Content | ConvertFrom-Json; $j.tunnels[0].public_url } catch { 'NOT_FOUND' }"') do set NGROK_URL=%%U
 

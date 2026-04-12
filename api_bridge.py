@@ -255,10 +255,9 @@ class APIBridge:
         h, m_val = now.hour, now.minute
         t_val = h * 60 + m_val
         if t_val < 9*60+20:      tw = "PRE_MARKET"
-        elif t_val <= 11*60:     tw = "PRIMARY"
-        elif t_val <= 11*60+30:  tw = "LATE_PRIMARY"
-        elif t_val <= 13*60+30:  tw = "DEAD_ZONE"
-        elif t_val <= 14*60:     tw = "SECONDARY"
+        elif t_val < 13*60:      tw = "PRIMARY"
+        elif t_val < 13*60+15:   tw = "DEAD_ZONE"    # 13:00–13:15 only
+        elif t_val < 15*60:      tw = "SECONDARY"
         else:                    tw = "EXIT_ONLY"
 
         return {
@@ -285,6 +284,7 @@ class APIBridge:
             "claude_last": bot.analyst.get_last(),
             "morning_intel": morning,
             "capital": config.TOTAL_CAPITAL,
+            "monthly_start_capital": config.MONTHLY_START_CAPITAL,
         }
 
     def start(self):

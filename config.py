@@ -5,43 +5,72 @@
 # ================================================================
 
 import os
+import re as _re
 from dataclasses import dataclass, field
 from typing import Dict, List
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)   # override=True: .env always wins over shell-level env vars
+
+
+def _read_env_direct(key: str, fallback: str) -> str:
+    """
+    Read a key directly from the .env file on disk — bypasses os.environ entirely.
+    This defeats stale Windows system/user env vars that survive across sessions.
+    Returns the unquoted value, or fallback if not found.
+    """
+    try:
+        env_path = os.path.join(os.path.dirname(__file__), ".env")
+        with open(env_path, "r", encoding="utf-8", errors="ignore") as _f:
+            for _line in _f:
+                _line = _line.rstrip("\r\n").strip()
+                if _line.startswith("#") or "=" not in _line:
+                    continue
+                _k, _, _v = _line.partition("=")
+                if _k.strip() == key:
+                    _v = _v.strip().strip("'\"")  # strip surrounding quotes
+                    return _v if _v else fallback
+    except Exception:
+        pass
+    return fallback
+
 
 # ── BROKER — UPSTOX ─────────────────────────────────────────────
-UPSTOX_API_KEY      = os.getenv("UPSTOX_API_KEY",      "")
-UPSTOX_API_SECRET   = os.getenv("UPSTOX_API_SECRET",   "")
-UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN", "")
-UPSTOX_REDIRECT_URI = os.getenv("UPSTOX_REDIRECT_URI", "https://127.0.0.1")
+UPSTOX_API_KEY      = _read_env_direct("UPSTOX_API_KEY",      os.getenv("UPSTOX_API_KEY",      ""))
+UPSTOX_API_SECRET   = _read_env_direct("UPSTOX_API_SECRET",   os.getenv("UPSTOX_API_SECRET",   ""))
+UPSTOX_ACCESS_TOKEN = _read_env_direct("UPSTOX_ACCESS_TOKEN", os.getenv("UPSTOX_ACCESS_TOKEN", ""))
+UPSTOX_REDIRECT_URI = _read_env_direct("UPSTOX_REDIRECT_URI", os.getenv("UPSTOX_REDIRECT_URI", "https://127.0.0.1"))
 UPSTOX_BASE_URL     = "https://api.upstox.com/v2"
 UPSTOX_BASE_URL_V3  = "https://api.upstox.com/v3"
 UPSTOX_WS_URL       = "wss://api.upstox.com/v3/feed/market-data-feed"
 
 # ── CLAUDE AI ────────────────────────────────────────────────────
-ANTHROPIC_API_KEY    = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_API_KEY    = _read_env_direct("ANTHROPIC_API_KEY", os.getenv("ANTHROPIC_API_KEY", ""))
 CLAUDE_MODEL         = "claude-sonnet-4-6"
-CLAUDE_MAX_TOKENS    = 700     # JSON response rarely exceeds 500 tokens — was 1200
+CLAUDE_MAX_TOKENS    = 1500    # JSON response + reasoning ~800-1100 tokens; 1500 = safe headroom
 
 # ── TELEGRAM ALERTS ──────────────────────────────────────────────
-TELEGRAM_BOT_TOKEN  = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID    = os.getenv("TELEGRAM_CHAT_ID",   "")
+TELEGRAM_BOT_TOKEN  = _read_env_direct("TELEGRAM_BOT_TOKEN", os.getenv("TELEGRAM_BOT_TOKEN", ""))
+TELEGRAM_CHAT_ID    = _read_env_direct("TELEGRAM_CHAT_ID",   os.getenv("TELEGRAM_CHAT_ID",   ""))
 TELEGRAM_ENABLED    = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
 
 # ── CAPITAL & SIZING ─────────────────────────────────────────────
-TOTAL_CAPITAL        = float(os.getenv("TRADING_CAPITAL", "50000"))
+# _read_env_direct reads from .env file on disk — immune to stale Windows env vars
+TOTAL_CAPITAL        = float(_read_env_direct("TRADING_CAPITAL", "50000"))
 
 # ── AGGRESSIVE POSITION SIZING — strength-based capital deployment ─
-# No fixed % cap. Deploy available capital based on signal conviction.
+# Uses AVAILABLE capital (total - locked in open trades), not raw TOTAL.
 # lots = floor(available_capital × strength_pct / (premium × lot_size))
 # Minimum 2 lots always. No upper lot limit.
+# Calibrated for ₹1L+ accounts. With ₹112k:
+#   MODERATE (35%) = ₹39k → Nifty @₹150 = 3 lots, BN @₹300 = 4 lots
+#   STRONG   (45%) = ₹51k → Nifty @₹150 = 4 lots, BN @₹300 = 5 lots
+#   GODMODE  (60%) = ₹68k → Nifty @₹150 = 6 lots, BN @₹300 = 7 lots
 STRENGTH_CAPITAL_PCT = {
-    "GODMODE":  0.50,   # 50% of available — highest conviction only
-    "STRONG":   0.35,   # 35% of available
-    "MODERATE": 0.25,   # 25% of available
-    "WEAK":     0.15,   # 15% of available — still trades, just smaller
+    "GODMODE":  0.60,   # 60% of available — max conviction (was 0.50)
+    "STRONG":   0.45,   # 45% of available (was 0.35)
+    "MODERATE": 0.35,   # 35% of available (was 0.25)
+    "WEAK":     0.20,   # 20% of available (was 0.15)
 }
 
 # Legacy fields kept for risk_manager backward compat — now overridden by STRENGTH_CAPITAL_PCT
@@ -62,8 +91,8 @@ DAILY_TARGET_PCT     = 0.10    # 10% daily soft target — after hit, T3+ blocke
 MONTHLY_TARGET_PCT   = 0.60    # 60% minimum monthly return target
 MONTHLY_STRETCH_PCT  = 1.20    # 120% stretch goal (best case month)
 # Set this to the capital value at START of current month (update on 1st of each month)
-MONTHLY_START_CAPITAL = float(os.getenv("MONTHLY_START_CAPITAL",
-                                         os.getenv("TRADING_CAPITAL", "50000")))
+MONTHLY_START_CAPITAL = float(_read_env_direct("MONTHLY_START_CAPITAL",
+                              _read_env_direct("TRADING_CAPITAL", "50000")))
 
 # ── OPTION SL / TARGET RULES ─────────────────────────────────────
 SL_PREMIUM_T1_3      = 0.25    # 25% SL on premium — slightly wider, less noise stops
@@ -177,7 +206,7 @@ WATCH_KEYS = [
 # IMPORTANT: These were updated by SEBI in Nov 2024 effective April 2025
 # Old: NIFTY=25, BANKNIFTY=15 — those are WRONG now
 LOT_SIZES = {
-    "NIFTY":     75,    # Updated April 2025
+    "NIFTY":     65,    # Confirmed via Upstox instruments API 2026-04-08
     "BANKNIFTY": 30,    # Updated April 2025
 }
 
@@ -193,14 +222,14 @@ BANKNIFTY_EXPIRY_MONTHLY  = True  # Flag: BN is monthly, not weekly
 # ── KEY S/R LEVELS (update every morning pre-market) ─────────────
 KEY_LEVELS: Dict[str, Dict[str, List[float]]] = {
     "BANKNIFTY": {
-        "resistance": [53000.0, 53700.0, 54100.0],  # Auto-updated 01 Apr 13:29
-        "support":    [50800.0, 51000.0, 51500.0],
-        "max_pain":   55000.0,
+        "resistance": [56000.0, 56100.0, 56200.0],  # Auto-updated 10 Apr 2026
+        "support":    [55800.0, 55700.0, 55600.0],
+        "max_pain":   55800.0,
     },
     "NIFTY": {
-        "resistance": [22900.0, 23000.0, 23050.0],  # Auto-updated 01 Apr 13:29
-        "support":    [22300.0, 22550.0, 22700.0],
-        "max_pain":   23100.0,
+        "resistance": [24100.0, 24150.0, 24200.0],  # Auto-updated 10 Apr 2026
+        "support":    [24000.0, 23950.0, 23900.0],
+        "max_pain":   24050.0,
     },
 }
 
@@ -264,7 +293,7 @@ PARAMS = Params()
 # "LIVE"   — actually place orders via Upstox API
 # "PAPER"  — simulate trades, no real orders
 # "SIGNAL" — show signals only, you trade manually
-EXECUTION_MODE = os.getenv("EXECUTION_MODE", "PAPER")
+EXECUTION_MODE = _read_env_direct("EXECUTION_MODE", os.getenv("EXECUTION_MODE", "PAPER"))
 
 # ── GIFT NIFTY PRE-MARKET BIAS (P2.2) ────────────────────────────
 # Updated by morning_update.py every session before main.py starts.
@@ -273,8 +302,8 @@ EXECUTION_MODE = os.getenv("EXECUTION_MODE", "PAPER")
 GIFT_NIFTY_PRICE      = 0.0
 GIFT_NIFTY_GAP_PCT    = 0.0
 GIFT_NIFTY_BIAS       = "UNAVAILABLE"
-GIFT_NIFTY_PREV_CLOSE = 0.0
-GIFT_NIFTY_UPDATED    = ""          # "HH:MM IST" timestamp of last successful fetch
+GIFT_NIFTY_PREV_CLOSE = 24050.6
+GIFT_NIFTY_UPDATED    = "21:56 IST"          # "HH:MM IST" timestamp of last successful fetch
 # Gap thresholds
 GIFT_GAP_STRONG = 1.5   # % — above = BULLISH_GAP / below = BEARISH_GAP
 GIFT_GAP_MILD   = 0.3   # % — above = MILD_BULL/BEAR, below = FLAT
@@ -315,11 +344,58 @@ DASHBOARD_REFRESH_HZ = 2
 
 # ── MARKET CONTEXT (update weekly) ───────────────────────────────
 MARKET_CONTEXT = {
-    "bn_daily_trend":    "SIDEWAYS",    # Auto-updated 01 Apr 13:29
-    "bn_bounce_day":     0,
-    "bn_bounce_from":    50275,
-    "bn_bounce_origin":  "April 01",
-    "nifty_daily_trend": "SIDEWAYS",
-    "monthly_bias":      "NEUTRAL",
+    "bn_daily_trend":    "DOWNTREND",
+    "bn_bounce_day":     11,
+    "bn_bounce_from":    53757,
+    "bn_bounce_origin":  "Auto",
+    "nifty_daily_trend": "DOWNTREND",
+    "monthly_bias":      "BEARISH",
     "vix_trend":         "ELEVATED",
 }
+
+# ── EXECUTION MODE ────────────────────────────────────────────────
+# "LIVE"   — actually place orders via Upstox API
+# "PAPER"  — simulate trades, no real orders
+# "SIGNAL" — show signals only, you trade manually
+EXECUTION_MODE = _read_env_direct("EXECUTION_MODE", os.getenv("EXECUTION_MODE", "PAPER"))
+
+# ── GIFT NIFTY PRE-MARKET BIAS (P2.2) ────────────────────────────
+# Updated by morning_update.py every session before main.py starts.
+# DO NOT edit manually — morning_update.py owns these values.
+# BIAS values: BULLISH_GAP | MILD_BULL | FLAT | MILD_BEAR | BEARISH_GAP | UNAVAILABLE
+GIFT_NIFTY_PRICE      = 0.0
+GIFT_NIFTY_GAP_PCT    = 0.0
+GIFT_NIFTY_BIAS       = "UNAVAILABLE"
+GIFT_NIFTY_PREV_CLOSE = 24050.6
+GIFT_NIFTY_UPDATED    = "21:56 IST"          # "HH:MM IST" timestamp of last successful fetch
+# Gap thresholds
+GIFT_GAP_STRONG = 1.5   # % — above = BULLISH_GAP / below = BEARISH_GAP
+GIFT_GAP_MILD   = 0.3   # % — above = MILD_BULL/BEAR, below = FLAT
+
+# ── PCR SIGNAL THRESHOLDS (P2.4) ──────────────────────────────────
+PCR_BULLISH      = 1.2
+PCR_BEARISH      = 0.8
+PCR_EXTREME_BEAR = 1.5
+PCR_EXTREME_BULL = 0.6
+PCR_ATM_STRIKES  = 10
+
+# ── FII/DII INSTITUTIONAL FLOW (P2.3) ─────────────────────────────
+FII_BULLISH_THRESH   = 2000.0
+FII_BEARISH_THRESH   = -2000.0
+FII_AVAILABLE_AFTER  = "11:00"
+FII_CACHE_TTL_SECS   = 900
+
+# ── GREEKS POLLING (P2.1) ─────────────────────────────────────────
+OC_POLL_INTERVAL  = 30
+DELTA_MIN_ENTRY   = 0.20
+IV_PCTILE_HIGH    = 80.0
+IV_HISTORY_WINDOW = 40
+
+# ── LOGGING ───────────────────────────────────────────────────────
+LOG_LEVEL         = "INFO"
+LOG_FILE          = "logs/warroom.log"
+TRADE_JOURNAL     = "data/trade_journal.json"
+PERFORMANCE_FILE  = "data/performance.json"
+
+# ── DASHBOARD ─────────────────────────────────────────────────────
+DASHBOARD_REFRESH_HZ = 2  
